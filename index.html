@@ -889,7 +889,7 @@ function startGame() {
   document.getElementById("start-screen").style.display = "none";
   document.getElementById("game").style.display = "block";
   document.getElementById("player-list").style.display = "none";
-  initMap();
+  if (!map) initMap();
   loadRound();
 }
 
@@ -939,7 +939,13 @@ function resetToStartScreen() {
   round = 1; totalScore = 0;
   document.getElementById("score").textContent = 0;
   document.getElementById("round").textContent = 1;
-  resetMapMarkers();
+  currentImageId = null; currentCoords = null;
+
+  // Fully tear down the map/viewer instead of just hiding them — Leaflet
+  // refuses to re-initialize a container that still has a live map bound to it.
+  if (mlyViewer) { try { mlyViewer.remove(); } catch {} mlyViewer = null; }
+  if (map) { try { map.remove(); } catch {} map = null; }
+  guessMarker = null; actualMarker = null; connectLine = null;
 
   document.getElementById("game").style.display = "none";
   document.getElementById("player-list").style.display = "none";
