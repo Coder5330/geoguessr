@@ -76,6 +76,12 @@
     transition: width 0.2s ease, height 0.2s ease;
   }
   #map-wrap:hover, #map-wrap.expanded { width: 46vw; height: 46vh; }
+  /* While results are showing, the map takes over most of the screen so you
+     can actually see your guess vs. the real location — the result bar below
+     only takes up the bottom strip instead of covering everything. */
+  #map-wrap.result-view {
+    top: 16px; left: 16px; right: 16px; bottom: 190px; width: auto; height: auto; z-index: 700; cursor: default;
+  }
   #map { width: 100%; height: 100%; }
 
   #hud {
@@ -107,12 +113,13 @@
   }
 
   #result {
-    position: fixed; inset: 0; background: rgba(6,8,12,0.92); display: none; align-items: center; justify-content: center;
-    flex-direction: column; gap: 12px; z-index: 900; text-align: center; padding: 20px;
+    position: fixed; left: 0; right: 0; bottom: 0; background: rgba(10,12,18,0.97);
+    backdrop-filter: blur(8px); border-top: 1px solid var(--border);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px; z-index: 900; text-align: center; padding: 18px 20px;
   }
   #result-card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 32px 36px;
-    display: flex; flex-direction: column; gap: 10px; align-items: center; max-width: 420px; width: 100%;
+    display: flex; flex-direction: column; gap: 8px; align-items: center; max-width: 480px; width: 100%;
   }
   #result h2 { margin: 0; font-size: 30px; }
   #result p { margin: 0; color: var(--text-dim); }
@@ -147,9 +154,10 @@
     #map-wrap { width: 110px; height: 80px; bottom: 90px; right: 10px; border-width: 2px; }
     #map-wrap:hover { width: 110px; height: 80px; }
     #map-wrap.expanded { width: 78vw; height: 46vh; }
+    #map-wrap.result-view { top: 10px; left: 10px; right: 10px; bottom: 230px; }
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; }
-    #result-card { padding: 22px 18px; }
+    #result { padding: 14px 16px; }
   }
 </style>
 </head>
@@ -633,11 +641,12 @@ function handleWSMessage(msg) {
         document.getElementById("result-title").textContent = "Between rounds";
         document.getElementById("result-detail").textContent = "Waiting for the host to continue...";
         document.getElementById("results-table").style.display = "none";
+        enterResultMapView();
         const btn = document.getElementById("next-btn");
         if (myId === hostId) {
           btn.style.display = "inline-block";
           btn.textContent = "Continue";
-          btn.onclick = () => { ws.send(JSON.stringify({ type: "start_round" })); document.getElementById("result").style.display = "none"; };
+          btn.onclick = () => { ws.send(JSON.stringify({ type: "start_round" })); document.getElementById("result").style.display = "none"; exitResultMapView(); };
         } else {
           btn.style.display = "none";
         }
@@ -673,6 +682,11 @@ function handleWSMessage(msg) {
     document.getElementById("loading").textContent = "Loading next location...";
     document.getElementById("round").textContent = msg.round;
     hasGuessedThisRound = false;
+    // The result screen from the round that just ended was never actually
+    // dismissed for anyone (only a special-case button handled it) — make
+    // sure every client (host and joiners) drops it once the next round loads.
+    document.getElementById("result").style.display = "none";
+    exitResultMapView();
     resetMapMarkers();
   }
 
@@ -735,6 +749,18 @@ function resetMapMarkers() {
   map.setView([20, 0], 2);
 }
 
+// The mini-map expands to fill most of the screen while results are shown,
+// so you can actually see your guess vs. the real location instead of it
+// being hidden behind a full-screen results overlay.
+function enterResultMapView() {
+  document.getElementById('map-wrap').classList.add('result-view');
+  if (map) map.invalidateSize();
+}
+function exitResultMapView() {
+  document.getElementById('map-wrap').classList.remove('result-view');
+  if (map) map.invalidateSize();
+}
+
 function showMultiplayerResult(msg) {
   const me = msg.results.find(r => r.id === myId);
   document.getElementById("result-title").textContent = me && me.dist != null
@@ -749,6 +775,7 @@ function showMultiplayerResult(msg) {
     `<tr><td>${r.name}</td><td>${r.dist != null ? Math.round(r.dist) + ' km' : '—'}</td><td>+${r.points}</td><td><b>${r.total}</b></td></tr>`
   ).join("");
 
+  enterResultMapView();
   if (msg.actual && map) {
     resetMapMarkers();
     actualMarker = L.marker([msg.actual.lat, msg.actual.lon], {
@@ -761,7 +788,11 @@ function showMultiplayerResult(msg) {
   if (myId === hostId) {
     btn.style.display = "inline-block";
     btn.textContent = msg.round >= msg.maxRounds ? "See final results" : "Next round";
-    btn.onclick = () => ws.send(JSON.stringify({ type: "start_round" }));
+    btn.onclick = () => {
+      ws.send(JSON.stringify({ type: "start_round" }));
+      document.getElementById("result").style.display = "none";
+      exitResultMapView();
+    };
   } else {
     btn.style.display = "none";
   }
@@ -770,6 +801,7 @@ function showMultiplayerResult(msg) {
 
 function showMultiplayerGameOver(msg) {
   document.getElementById("result").style.display = "flex";
+  enterResultMapView();
   document.getElementById("result-title").textContent = "Game over";
   document.getElementById("result-detail").textContent = "";
   const table = document.getElementById("results-table");
@@ -826,6 +858,7 @@ function submitGuess(forced) {
     document.getElementById("result-title").textContent = "Time's up!";
     document.getElementById("result-detail").textContent = `+0 points · Total: ${totalScore}`;
     document.getElementById("result").style.display = "flex";
+    enterResultMapView();
     return;
   }
   stopTimer();
@@ -836,6 +869,8 @@ function submitGuess(forced) {
   document.getElementById("score").textContent = totalScore;
   saveSoloSession();
 
+  document.getElementById("result").style.display = "flex";
+  enterResultMapView();
   actualMarker = L.marker([currentCoords.lat, currentCoords.lon], {
     icon: L.divIcon({ className: '', html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white"></div>' })
   }).addTo(map);
@@ -846,11 +881,11 @@ function submitGuess(forced) {
   document.getElementById("next-btn").style.display = "inline-block";
   document.getElementById("result-title").textContent = `${Math.round(dist)} km away`;
   document.getElementById("result-detail").textContent = `+${points} points · Total: ${totalScore}`;
-  document.getElementById("result").style.display = "flex";
 }
 
 function nextRound() {
   document.getElementById("result").style.display = "none";
+  exitResultMapView();
   if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
   if (actualMarker) { map.removeLayer(actualMarker); actualMarker = null; }
   if (connectLine) { map.removeLayer(connectLine); connectLine = null; }
@@ -946,6 +981,7 @@ function resetToStartScreen() {
   if (mlyViewer) { try { mlyViewer.remove(); } catch {} mlyViewer = null; }
   if (map) { try { map.remove(); } catch {} map = null; }
   guessMarker = null; actualMarker = null; connectLine = null;
+  document.getElementById('map-wrap').classList.remove('result-view', 'expanded');
 
   document.getElementById("game").style.display = "none";
   document.getElementById("player-list").style.display = "none";
