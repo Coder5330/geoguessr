@@ -824,11 +824,20 @@ function submitGuessMultiplayer() {
 }
 
 function initMap() {
-  map = L.map('map').setView([20, 0], 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+  // Without maxBounds, Leaflet lets you keep panning past +/-180deg into a
+  // repeated copy of the world map — a click there returns a raw longitude
+  // outside -180..180 (e.g. 200 instead of -160), which throws off both the
+  // guess marker's position and the line drawn to the actual location.
+  // Locking to a single world copy (plus wrap() as a defensive fallback)
+  // keeps every click a normal, real-world coordinate.
+  map = L.map('map', {
+    maxBounds: [[-90, -180], [90, 180]],
+    maxBoundsViscosity: 1.0,
+  }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, noWrap: true }).addTo(map);
   map.on('click', (e) => {
     if (guessMarker) map.removeLayer(guessMarker);
-    guessMarker = L.marker(e.latlng).addTo(map);
+    guessMarker = L.marker(e.latlng.wrap()).addTo(map);
   });
   const wrap = document.getElementById('map-wrap');
   wrap.addEventListener('mouseenter', () => setTimeout(() => map.invalidateSize(), 210));
