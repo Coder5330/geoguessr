@@ -281,14 +281,15 @@ function maybeFinishRound(room) {
 const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
     const filePath = path.join(__dirname, 'index.html');
-    fs.readFile(filePath, (err, data) => {
+    fs.readFile(filePath, 'utf8', (err, data) => {
       if (err) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end('index.html not found next to server.js — make sure it was deployed alongside it.');
         return;
       }
+      const html = data.replace('__MAPILLARY_TOKEN__', TOKEN || '');
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(data);
+      res.end(html);
     });
     return;
   }
