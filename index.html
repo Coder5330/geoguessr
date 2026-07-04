@@ -843,13 +843,19 @@ function initMap() {
   wrap.addEventListener('mouseenter', () => setTimeout(() => map.invalidateSize(), 210));
   wrap.addEventListener('mouseleave', () => setTimeout(() => map.invalidateSize(), 210));
   // Touch devices don't get :hover, so tap-to-expand toggles a class instead.
+  // Registered on the CAPTURE phase (and stopped there) so the very first tap
+  // only expands the map — without this, that same click already reaches
+  // Leaflet's own click handler on the way down/up and places a guess at
+  // whatever imprecise spot the tiny collapsed map happened to be showing,
+  // before the user ever gets to see the expanded view.
+  const supportsHover = window.matchMedia('(hover: hover)').matches;
   wrap.addEventListener('click', (e) => {
-    if (!wrap.classList.contains('expanded')) {
+    if (!supportsHover && !wrap.classList.contains('expanded')) {
+      e.stopPropagation();
       wrap.classList.add('expanded');
       setTimeout(() => map.invalidateSize(), 210);
-      e.stopPropagation();
     }
-  });
+  }, true);
   document.addEventListener('click', (e) => {
     if (wrap.classList.contains('expanded') && !wrap.contains(e.target)) {
       wrap.classList.remove('expanded');
