@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import Protobuf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
@@ -12,6 +13,9 @@ const TOKEN = process.env.MAPILLARY_TOKEN;
 const PORT = process.env.PORT || 8080;
 const MAX_ROUNDS = 5;
 const GUESS_TIMEOUT_MS = 60000;
+// How long a disconnected player's seat stays reserved (score, host status)
+// so a page refresh can rejoin the same room instead of losing everything.
+const DISCONNECT_GRACE_MS = 30000;
 
 if (!TOKEN) {
   console.error('MAPILLARY_TOKEN environment variable is not set. Set it in Railway before deploying.');
@@ -213,7 +217,7 @@ function generateCode() {
 }
 
 function send(ws, msg) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 function broadcast(room, msg) {
   for (const p of room.players.values()) send(p.ws, msg);
@@ -244,8 +248,9 @@ async function startRound(room) {
     return;
   }
   room.currentLocation = loc;
+  room.roundStartedAt = Date.now();
   broadcastPlayers(room);
-  broadcast(room, { type: 'round_start', round: room.round, maxRounds: MAX_ROUNDS, imageId: loc.id });
+  broadcast(room, { type: 'round_start', round: room.round, maxRounds: MAX_ROUNDS, imageId: loc.id, timeLeft: GUESS_TIMEOUT_MS });
 
   clearTimeout(room.timer);
   room.timer = setTimeout(() => finishRound(room), GUESS_TIMEOUT_MS);
@@ -279,7 +284,8 @@ function maybeFinishRound(room) {
 // --- WebSocket wiring ---
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/' || req.url === '/index.html') {
+  const pathname = req.url.split('?')[0];
+  if (pathname === '/' || pathname === '/index.html') {
     const filePath = path.join(__dirname, 'index.html');
     fs.readFile(filePath, 'utf8', (err, data) => {
       if (err) {
@@ -300,8 +306,28 @@ const wss = new WebSocketServer({ server });
 
 let nextId = 1;
 
+function roomPhase(room) {
+  if (room.currentLocation) return 'round';
+  if (room.round === 0) return 'lobby';
+  return 'between';
+}
+
+function removePlayer(room, id) {
+  room.players.delete(id);
+  if (room.players.size === 0) {
+    clearTimeout(room.timer);
+    rooms.delete(room.code);
+    return;
+  }
+  if (room.hostId === id) {
+    room.hostId = room.players.keys().next().value;
+  }
+  broadcastPlayers(room);
+  maybeFinishRound(room);
+}
+
 wss.on('connection', (ws) => {
-  const id = nextId++;
+  let id = nextId++;
   let room = null;
 
   ws.on('message', async (raw) => {
@@ -310,13 +336,14 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'create_room') {
       const code = generateCode();
+      const token = crypto.randomUUID();
       room = {
         code, players: new Map(), round: 0, guesses: new Map(),
-        currentLocation: null, hostId: id, timer: null,
+        currentLocation: null, hostId: id, timer: null, roundStartedAt: null,
       };
-      room.players.set(id, { ws, name: (msg.name || 'Player').slice(0, 20), score: 0 });
+      room.players.set(id, { ws, name: (msg.name || 'Player').slice(0, 20), score: 0, token, disconnectTimer: null });
       rooms.set(code, room);
-      send(ws, { type: 'room_created', code, id, hostId: id });
+      send(ws, { type: 'room_created', code, id, hostId: id, token });
       broadcastPlayers(room);
     }
 
@@ -324,8 +351,37 @@ wss.on('connection', (ws) => {
       const code = (msg.code || '').toUpperCase().trim();
       room = rooms.get(code);
       if (!room) { send(ws, { type: 'error', message: 'Room not found. Check the code.' }); return; }
-      room.players.set(id, { ws, name: (msg.name || 'Player').slice(0, 20), score: 0 });
-      send(ws, { type: 'room_joined', code: room.code, id, hostId: room.hostId, round: room.round, maxRounds: MAX_ROUNDS });
+      const token = crypto.randomUUID();
+      room.players.set(id, { ws, name: (msg.name || 'Player').slice(0, 20), score: 0, token, disconnectTimer: null });
+      send(ws, { type: 'room_joined', code: room.code, id, hostId: room.hostId, round: room.round, maxRounds: MAX_ROUNDS, token });
+      broadcastPlayers(room);
+    }
+
+    else if (msg.type === 'rejoin') {
+      const code = (msg.code || '').toUpperCase().trim();
+      const targetRoom = rooms.get(code);
+      if (!targetRoom) { send(ws, { type: 'rejoin_failed' }); return; }
+      let foundId = null, player = null;
+      for (const [pid, p] of targetRoom.players) {
+        if (p.token === msg.token) { foundId = pid; player = p; break; }
+      }
+      if (!player) { send(ws, { type: 'rejoin_failed' }); return; }
+
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+      player.ws = ws;
+      id = foundId;
+      room = targetRoom;
+
+      const phase = roomPhase(room);
+      send(ws, {
+        type: 'rejoined',
+        id, hostId: room.hostId, code: room.code, round: room.round, maxRounds: MAX_ROUNDS,
+        players: playerList(room), phase,
+        imageId: phase === 'round' ? room.currentLocation.id : undefined,
+        timeLeft: phase === 'round' ? Math.max(0, GUESS_TIMEOUT_MS - (Date.now() - room.roundStartedAt)) : undefined,
+        alreadyGuessed: room.guesses.has(foundId),
+      });
       broadcastPlayers(room);
     }
 
@@ -345,17 +401,12 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (!room) return;
-    room.players.delete(id);
-    if (room.players.size === 0) {
-      clearTimeout(room.timer);
-      rooms.delete(room.code);
-      return;
-    }
-    if (room.hostId === id) {
-      room.hostId = room.players.keys().next().value;
-    }
-    broadcastPlayers(room);
-    maybeFinishRound(room);
+    const player = room.players.get(id);
+    if (!player) return;
+    player.ws = null;
+    // Don't tear down the seat immediately — a refresh reconnects within
+    // this window via 'rejoin' and picks the same score/host status back up.
+    player.disconnectTimer = setTimeout(() => removePlayer(room, id), DISCONNECT_GRACE_MS);
   });
 });
 

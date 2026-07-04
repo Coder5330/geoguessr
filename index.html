@@ -2,55 +2,160 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Geoguessr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <link href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css" rel="stylesheet" />
 <script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
 <style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #171b24;
+    --panel-2: #1f2430;
+    --border: #2a3040;
+    --text: #f2f3f5;
+    --text-dim: #9aa3b2;
+    --accent: #22c55e;
+    --accent-hover: #1ba750;
+    --accent-2: #8b5cf6;
+    --danger: #ef4444;
+    --warn: #f59e0b;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, sans-serif; background: #111; color: #eee; height: 100vh; overflow: hidden; }
-  #start-screen { position: fixed; inset: 0; background: #111; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; z-index: 1000; padding: 20px; text-align: center; }
-  #start-screen input { width: 400px; max-width: 90vw; padding: 10px; font-size: 14px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; }
-  .btn { padding: 12px 28px; font-size: 15px; border-radius: 6px; border: none; background: #3b82f6; color: white; cursor: pointer; }
-  .btn:hover { background: #2563eb; }
-  #game { display: none; height: 100vh; position: relative; }
+  body {
+    margin: 0; font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text);
+    height: 100vh; overflow: hidden;
+  }
+  h1, h2 { font-weight: 800; }
+
+  #start-screen {
+    position: fixed; inset: 0;
+    background: radial-gradient(circle at 50% 20%, #151a24 0%, var(--bg) 70%);
+    display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+    z-index: 1000; padding: 20px; text-align: center;
+  }
+  #start-screen h1 { margin: 0; font-size: 42px; letter-spacing: -0.5px; }
+  #start-screen h1 span { color: var(--accent); }
+  #start-screen input {
+    width: 320px; max-width: 90vw; padding: 12px 14px; font-size: 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); text-align: center;
+    outline: none;
+  }
+  #start-screen input:focus { border-color: var(--accent); }
+
+  .btn {
+    padding: 13px 30px; font-size: 15px; font-weight: 700; border-radius: 999px; border: none;
+    background: var(--accent); color: #06210f; cursor: pointer; transition: transform 0.08s ease, background 0.15s ease;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { background: #3a4152; color: #6b7280; cursor: not-allowed; transform: none; }
+  .btn-secondary { background: var(--accent-2); color: #fff; }
+  .btn-secondary:hover { background: #7c4de0; }
+  .btn-ghost {
+    background: transparent; color: var(--text-dim); border: 1px solid var(--border); padding: 8px 16px; font-size: 13px;
+  }
+  .btn-ghost:hover { background: var(--panel-2); color: var(--text); }
+
+  #game { display: none; height: 100vh; position: relative; background: #000; }
   #photo-panel { height: 100vh; background: #000; position: relative; }
   #mly { width: 100%; height: 100%; }
-  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #888; text-align: center; padding: 20px; z-index: 5; background: #000; }
-  #map-wrap {
-    position: absolute; bottom: 16px; right: 16px; width: 220px; height: 150px;
-    border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    border: 2px solid rgba(255,255,255,0.3); z-index: 600;
-    transition: width 0.2s ease, height 0.2s ease; cursor: pointer;
+  #loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 15px; color: var(--text-dim); text-align: center; padding: 20px; z-index: 5; background: rgba(0,0,0,0.85);
   }
-  #map-wrap:hover { width: 45vw; height: 45vh; }
+
+  #map-wrap {
+    position: absolute; bottom: 18px; right: 18px; width: 200px; height: 140px;
+    border-radius: 14px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+    border: 3px solid var(--accent); z-index: 600; cursor: pointer;
+    transition: width 0.2s ease, height 0.2s ease;
+  }
+  #map-wrap:hover, #map-wrap.expanded { width: 46vw; height: 46vh; }
   #map { width: 100%; height: 100%; }
-  #hud { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 8px 14px; border-radius: 8px; font-size: 14px; z-index: 500; }
-  #guess-btn { position: absolute; bottom: 16px; left: 16px; z-index: 600; }
-  #result { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; z-index: 900; text-align: center; padding: 20px; }
-  #result h2 { margin: 0; font-size: 28px; }
-  #result p { margin: 0; color: #aaa; }
-  #lobby { display: none; flex-direction: column; gap: 14px; align-items: center; }
-  #lobby input { width: 280px; padding: 10px; font-size: 14px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; text-align: center; }
-  #lobby-code { font-size: 32px; letter-spacing: 6px; font-weight: bold; background: #222; padding: 10px 20px; border-radius: 8px; }
-  #lobby-link { font-size: 12px; color: #999; word-break: break-all; max-width: 340px; }
-  .divider { color: #555; font-size: 13px; }
-  #player-list { position: absolute; top: 12px; right: 16px; background: rgba(0,0,0,0.7); padding: 10px 14px; border-radius: 8px; font-size: 13px; z-index: 500; min-width: 140px; }
-  #player-list .player-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
-  #player-list .guessed { color: #4ade80; }
-  #results-table { width: 100%; max-width: 340px; text-align: left; font-size: 14px; }
-  #results-table td { padding: 4px 6px; }
+
+  #hud {
+    position: absolute; top: 14px; left: 14px; z-index: 500; display: flex; gap: 8px;
+  }
+  .hud-pill {
+    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); padding: 8px 16px; border-radius: 999px;
+    font-size: 14px; font-weight: 600; border: 1px solid var(--border); white-space: nowrap;
+  }
+  .hud-pill b, .hud-pill #score, .hud-pill #round { color: var(--accent); }
+
+  #timer {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500;
+    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); border: 1px solid var(--border);
+    border-radius: 999px; padding: 8px 18px; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums;
+    color: var(--accent); transition: color 0.2s ease, border-color 0.2s ease;
+  }
+  #timer.timer-warn { color: var(--warn); border-color: var(--warn); }
+  #timer.timer-danger { color: var(--danger); border-color: var(--danger); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  #guess-btn {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 600;
+    padding: 15px 46px; font-size: 16px; box-shadow: 0 6px 20px rgba(34,197,94,0.35);
+  }
+
+  #result {
+    position: fixed; inset: 0; background: rgba(6,8,12,0.92); display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; z-index: 900; text-align: center; padding: 20px;
+  }
+  #result-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 32px 36px;
+    display: flex; flex-direction: column; gap: 10px; align-items: center; max-width: 420px; width: 100%;
+  }
+  #result h2 { margin: 0; font-size: 30px; }
+  #result p { margin: 0; color: var(--text-dim); }
+  #results-table { width: 100%; max-width: 360px; text-align: left; font-size: 14px; border-collapse: collapse; margin-top: 6px; }
+  #results-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  #results-table tr:first-child td { color: var(--accent); font-weight: 700; }
+
+  #lobby { display: none; flex-direction: column; gap: 16px; align-items: center; }
+  #lobby input { text-transform: none; }
+  #lobby-code {
+    font-size: 34px; letter-spacing: 8px; font-weight: 800; background: var(--panel); padding: 12px 24px;
+    border-radius: 10px; border: 1px solid var(--border); color: var(--accent);
+  }
+  #lobby-link-row { display: flex; gap: 8px; align-items: center; max-width: 360px; }
+  #lobby-link { font-size: 12px; color: var(--text-dim); word-break: break-all; }
+  .divider { color: #4a5164; font-size: 13px; }
+
+  #player-list {
+    position: absolute; top: 14px; right: 16px; background: rgba(15,18,25,0.85); backdrop-filter: blur(6px);
+    padding: 12px 16px; border-radius: 12px; font-size: 13px; z-index: 500; min-width: 150px;
+    border: 1px solid var(--border);
+  }
+  #player-list .player-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+  #player-list .player-row.host span:first-child::before { content: "\1F451 "; }
+  #player-list .guessed { color: var(--accent); font-weight: 600; }
+
+  @media (max-width: 700px) {
+    #start-screen h1 { font-size: 30px; }
+    #start-screen input { width: 100%; }
+    .hud-pill { padding: 6px 11px; font-size: 12px; }
+    #player-list { padding: 8px 10px; font-size: 11px; min-width: 100px; }
+    #map-wrap { width: 110px; height: 80px; bottom: 90px; right: 10px; border-width: 2px; }
+    #map-wrap:hover { width: 110px; height: 80px; }
+    #map-wrap.expanded { width: 78vw; height: 46vh; }
+    #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
+    #timer { font-size: 13px; padding: 6px 12px; }
+    #result-card { padding: 22px 18px; }
+  }
 </style>
 </head>
 <body>
 
 <div id="start-screen">
-  <h1 style="margin:0">Geoguessr</h1>
-  <p style="color:#999; max-width:420px; font-size:14px">Walk around a real street using the arrows, then guess where you are on the map.</p>
+  <h1>Geo<span>Guessr</span></h1>
+  <p style="color:var(--text-dim); max-width:420px; font-size:14px">Walk around a real street using the arrows, then guess where you are on the map.</p>
   <button class="btn" id="start-btn">Play solo</button>
   <div class="divider">or</div>
-  <button class="btn" id="friends-btn" style="background:#8b5cf6">Play with friends</button>
+  <button class="btn btn-secondary" id="friends-btn">Play with friends</button>
 
   <div id="lobby">
     <div id="lobby-create">
@@ -62,18 +167,25 @@
       <input id="join-code-input" type="text" placeholder="Room code" maxlength="5" style="text-transform:uppercase" />
       <button class="btn" id="join-room-btn" style="margin-top:8px">Join room</button>
     </div>
-    <div id="lobby-waiting" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+    <div id="lobby-waiting" style="display:none; flex-direction:column; align-items:center; gap:12px;">
       <div id="lobby-code"></div>
-      <div id="lobby-link"></div>
+      <div id="lobby-link-row">
+        <div id="lobby-link"></div>
+        <button class="btn-ghost" id="copy-link-btn" style="display:none; border-radius:6px; padding:4px 10px; font-size:11px; cursor:pointer;">Copy</button>
+      </div>
       <div id="lobby-players" style="font-size:14px; color:#ccc;"></div>
       <button class="btn" id="host-start-btn" style="display:none">Start game</button>
-      <p id="lobby-status" style="font-size:13px; color:#999">Waiting for host to start...</p>
+      <p id="lobby-status" style="font-size:13px; color:var(--text-dim)">Waiting for host to start...</p>
     </div>
   </div>
 </div>
 
 <div id="game">
-  <div id="hud">Round <span id="round">1</span>/5 · Score <span id="score">0</span></div>
+  <div id="hud">
+    <div class="hud-pill">Round <span id="round">1</span>/5</div>
+    <div class="hud-pill">Score <span id="score">0</span></div>
+  </div>
+  <div id="timer" style="display:none">60</div>
   <div id="player-list" style="display:none"></div>
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
@@ -84,10 +196,12 @@
 </div>
 
 <div id="result">
-  <h2 id="result-title"></h2>
-  <p id="result-detail"></p>
-  <table id="results-table" style="display:none"></table>
-  <button class="btn" id="next-btn">Next round</button>
+  <div id="result-card">
+    <h2 id="result-title"></h2>
+    <p id="result-detail"></p>
+    <table id="results-table" style="display:none"></table>
+    <button class="btn" id="next-btn">Next round</button>
+  </div>
 </div>
 
 <script>
@@ -99,17 +213,87 @@ let TOKEN = "__MAPILLARY_TOKEN__"; // injected by server.js from the MAPILLARY_T
 const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 let map, guessMarker, actualMarker, connectLine, mlyViewer;
 let currentCoords = null;
+let currentImageId = null;
 let round = 1;
 let totalScore = 0;
 const MAX_ROUNDS = 5;
+const SOLO_TIMEOUT_MS = 60000;
+const MP_SESSION_KEY = "gw_mp_session";
+const SOLO_SESSION_KEY = "gw_solo_session";
 
 // --- Multiplayer state ---
 let ws = null;
 let myId = null;
+let myToken = null;
+let myName = "Player";
+let currentRoomCode = null;
 let hostId = null;
 let isMultiplayer = false;
 let hasGuessedThisRound = false;
 let latestPlayers = [];
+
+// --- Round timer ---
+let timerInterval = null;
+let timerEndAt = 0;
+
+function startTimer(ms) {
+  stopTimer();
+  timerEndAt = Date.now() + (ms || 0);
+  const el = document.getElementById("timer");
+  el.style.display = "inline-flex";
+  const tick = () => {
+    const remain = Math.max(0, timerEndAt - Date.now());
+    const secs = Math.ceil(remain / 1000);
+    el.textContent = secs;
+    el.classList.toggle("timer-warn", secs <= 15 && secs > 5);
+    el.classList.toggle("timer-danger", secs <= 5);
+    if (remain <= 0) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      onTimerExpired();
+    }
+  };
+  tick();
+  timerInterval = setInterval(tick, 250);
+}
+function stopTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = null;
+  const el = document.getElementById("timer");
+  el.style.display = "none";
+  el.classList.remove("timer-warn", "timer-danger");
+}
+function onTimerExpired() {
+  if (!isMultiplayer) {
+    submitGuess(true);
+  } else {
+    document.getElementById("guess-btn").disabled = true;
+  }
+}
+
+// --- Session persistence (survive a page refresh) ---
+
+function saveMPSession() {
+  if (!currentRoomCode || !myToken) return;
+  localStorage.setItem(MP_SESSION_KEY, JSON.stringify({ code: currentRoomCode, token: myToken, name: myName }));
+}
+function clearMPSession() { localStorage.removeItem(MP_SESSION_KEY); }
+function loadMPSession() {
+  try { return JSON.parse(localStorage.getItem(MP_SESSION_KEY) || "null"); } catch { return null; }
+}
+
+function saveSoloSession() {
+  if (isMultiplayer || !currentImageId) return;
+  localStorage.setItem(SOLO_SESSION_KEY, JSON.stringify({
+    round, totalScore, imageId: currentImageId,
+    lat: currentCoords ? currentCoords.lat : null,
+    lon: currentCoords ? currentCoords.lon : null,
+  }));
+}
+function clearSoloSession() { localStorage.removeItem(SOLO_SESSION_KEY); }
+function loadSoloSession() {
+  try { return JSON.parse(localStorage.getItem(SOLO_SESSION_KEY) || "null"); } catch { return null; }
+}
 
 // Well-covered street locations to seed each round's search
 const SPOTS = [
@@ -290,11 +474,30 @@ async function findStartImageId(spot) {
   };
 }
 
+// Shared Mapillary viewer setup used by solo, multiplayer, and resume/rejoin flows.
+function mountViewer(imageId, { onImage } = {}) {
+  currentImageId = imageId;
+  if (mlyViewer) { mlyViewer.remove(); mlyViewer = null; }
+  mlyViewer = new mapillary.Viewer({
+    accessToken: TOKEN,
+    container: 'mly',
+    imageId: imageId,
+    component: { cover: false },
+  });
+  mlyViewer.on('image', (event) => {
+    if (event.image && event.image.lngLat) {
+      currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
+    }
+    if (onImage) onImage();
+  });
+}
+
 async function loadRound(tried = []) {
   const status = document.getElementById("loading");
   status.style.display = "flex";
   status.textContent = "Loading street view...";
   document.getElementById("round").textContent = round;
+  document.getElementById("guess-btn").disabled = false;
 
   const remaining = SPOTS.filter(s => !tried.includes(s.name));
   if (remaining.length === 0) {
@@ -309,23 +512,11 @@ async function loadRound(tried = []) {
     if (!start) return loadRound([...tried, spot.name]);
 
     currentCoords = { lat: start.lat, lon: start.lon };
-
-    if (mlyViewer) { mlyViewer.remove(); mlyViewer = null; }
-    mlyViewer = new mapillary.Viewer({
-      accessToken: TOKEN,
-      container: 'mly',
-      imageId: start.id,
-      component: { cover: false },
+    mountViewer(start.id, {
+      onImage: () => { status.style.display = "none"; saveSoloSession(); }
     });
-
-    mlyViewer.on('image', (event) => {
-      // Update "true" location as the player walks, so scoring reflects where
-      // they end up looking from, not just the starting point.
-      if (event.image && event.image.lngLat) {
-        currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
-      }
-      status.style.display = "none";
-    });
+    saveSoloSession();
+    startTimer(SOLO_TIMEOUT_MS);
   } catch (err) {
     status.textContent = "Error: " + err.message;
   }
@@ -357,7 +548,8 @@ function connectWS(onOpen) {
 
 function handleWSMessage(msg) {
   if (msg.type === "room_created") {
-    myId = msg.id; hostId = msg.hostId;
+    myId = msg.id; hostId = msg.hostId; myToken = msg.token; currentRoomCode = msg.code;
+    saveMPSession();
     document.getElementById("lobby-create").style.display = "none";
     document.getElementById("lobby-join").previousElementSibling.style.display = "none";
     document.getElementById("lobby-join").style.display = "none";
@@ -365,19 +557,81 @@ function handleWSMessage(msg) {
     document.getElementById("lobby-code").textContent = msg.code;
     const link = `${location.origin}${location.pathname}?room=${msg.code}`;
     document.getElementById("lobby-link").textContent = link;
+    document.getElementById("copy-link-btn").style.display = "inline-block";
     document.getElementById("host-start-btn").style.display = "inline-block";
     document.getElementById("lobby-status").textContent = "Share the code or link. Start whenever you're ready.";
   }
 
   else if (msg.type === "room_joined") {
-    myId = msg.id; hostId = msg.hostId;
+    myId = msg.id; hostId = msg.hostId; myToken = msg.token; currentRoomCode = msg.code;
+    saveMPSession();
     document.getElementById("lobby-create").style.display = "none";
     document.getElementById("lobby-join").previousElementSibling.style.display = "none";
     document.getElementById("lobby-join").style.display = "none";
     document.getElementById("lobby-waiting").style.display = "flex";
     document.getElementById("lobby-code").textContent = msg.code;
     document.getElementById("lobby-link").textContent = "";
+    document.getElementById("copy-link-btn").style.display = "none";
     document.getElementById("lobby-status").textContent = "Waiting for host to start...";
+  }
+
+  else if (msg.type === "rejoined") {
+    isMultiplayer = true;
+    myId = msg.id; hostId = msg.hostId; currentRoomCode = msg.code;
+    round = msg.round || 1;
+    latestPlayers = msg.players;
+    const me = latestPlayers.find(p => p.id === myId);
+    totalScore = me ? me.score : 0;
+    document.getElementById("score").textContent = totalScore;
+    document.getElementById("round").textContent = Math.max(round, 1);
+    renderInGamePlayers();
+
+    if (msg.phase === "lobby") {
+      document.getElementById("game").style.display = "none";
+      document.getElementById("player-list").style.display = "none";
+      document.getElementById("start-screen").style.display = "flex";
+      showLobby();
+      document.getElementById("lobby-create").style.display = "none";
+      document.getElementById("lobby-join").previousElementSibling.style.display = "none";
+      document.getElementById("lobby-join").style.display = "none";
+      document.getElementById("lobby-waiting").style.display = "flex";
+      document.getElementById("lobby-code").textContent = msg.code;
+      document.getElementById("host-start-btn").style.display = myId === hostId ? "inline-block" : "none";
+      document.getElementById("lobby-status").textContent = "Waiting for host to start...";
+    } else {
+      document.getElementById("start-screen").style.display = "none";
+      document.getElementById("game").style.display = "block";
+      document.getElementById("player-list").style.display = "block";
+      if (!map) initMap();
+
+      if (msg.phase === "round") {
+        document.getElementById("loading").style.display = "flex";
+        document.getElementById("loading").textContent = "Loading street view...";
+        loadImageIntoViewer(msg.imageId, msg.alreadyGuessed);
+        startTimer(msg.timeLeft || 0);
+      } else {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("result").style.display = "flex";
+        document.getElementById("result-title").textContent = "Between rounds";
+        document.getElementById("result-detail").textContent = "Waiting for the host to continue...";
+        document.getElementById("results-table").style.display = "none";
+        const btn = document.getElementById("next-btn");
+        if (myId === hostId) {
+          btn.style.display = "inline-block";
+          btn.textContent = "Continue";
+          btn.onclick = () => { ws.send(JSON.stringify({ type: "start_round" })); document.getElementById("result").style.display = "none"; };
+        } else {
+          btn.style.display = "none";
+        }
+      }
+    }
+  }
+
+  else if (msg.type === "rejoin_failed") {
+    clearMPSession();
+    document.getElementById("game").style.display = "none";
+    document.getElementById("player-list").style.display = "none";
+    document.getElementById("start-screen").style.display = "flex";
   }
 
   else if (msg.type === "players") {
@@ -395,6 +649,8 @@ function handleWSMessage(msg) {
       document.getElementById("player-list").style.display = "block";
       if (!map) initMap();
     }
+    stopTimer();
+    document.getElementById("guess-btn").disabled = false;
     document.getElementById("loading").style.display = "flex";
     document.getElementById("loading").textContent = "Loading next location...";
     document.getElementById("round").textContent = msg.round;
@@ -405,13 +661,17 @@ function handleWSMessage(msg) {
   else if (msg.type === "round_start") {
     document.getElementById("round").textContent = msg.round;
     loadImageIntoViewer(msg.imageId);
+    startTimer(msg.timeLeft || 60000);
   }
 
   else if (msg.type === "round_result") {
+    stopTimer();
     showMultiplayerResult(msg);
   }
 
   else if (msg.type === "game_over") {
+    stopTimer();
+    clearMPSession();
     showMultiplayerGameOver(msg);
   }
 
@@ -430,24 +690,22 @@ function renderInGamePlayers() {
   const el = document.getElementById("player-list");
   if (!isMultiplayer) return;
   el.innerHTML = latestPlayers
-    .map(p => `<div class="player-row"><span>${p.name}</span><span class="${p.guessed ? 'guessed' : ''}">${p.guessed ? 'guessed' : p.score}</span></div>`)
+    .map(p => `<div class="player-row${p.id === hostId ? ' host' : ''}"><span>${p.name}</span><span class="${p.guessed ? 'guessed' : ''}">${p.guessed ? 'guessed' : p.score}</span></div>`)
     .join("");
 }
 
-function loadImageIntoViewer(imageId) {
+function loadImageIntoViewer(imageId, alreadyGuessed) {
   const status = document.getElementById("loading");
-  if (mlyViewer) { mlyViewer.remove(); mlyViewer = null; }
-  mlyViewer = new mapillary.Viewer({
-    accessToken: TOKEN,
-    container: 'mly',
-    imageId: imageId,
-    component: { cover: false },
-  });
-  mlyViewer.on('image', (event) => {
-    if (event.image && event.image.lngLat) {
-      currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
+  hasGuessedThisRound = !!alreadyGuessed;
+  document.getElementById("guess-btn").disabled = hasGuessedThisRound;
+  if (hasGuessedThisRound) {
+    status.style.display = "flex";
+    status.textContent = "Guess submitted — waiting for other players...";
+  }
+  mountViewer(imageId, {
+    onImage: () => {
+      if (!hasGuessedThisRound) status.style.display = "none";
     }
-    status.style.display = "none";
   });
 }
 
@@ -508,6 +766,7 @@ function submitGuessMultiplayer() {
   if (!guessMarker) { alert("Click the map to place a guess first"); return; }
   if (hasGuessedThisRound) return;
   hasGuessedThisRound = true;
+  document.getElementById("guess-btn").disabled = true;
   const guess = guessMarker.getLatLng();
   ws.send(JSON.stringify({ type: "submit_guess", lat: guess.lat, lon: guess.lng }));
   document.getElementById("loading").style.display = "flex";
@@ -524,15 +783,40 @@ function initMap() {
   const wrap = document.getElementById('map-wrap');
   wrap.addEventListener('mouseenter', () => setTimeout(() => map.invalidateSize(), 210));
   wrap.addEventListener('mouseleave', () => setTimeout(() => map.invalidateSize(), 210));
+  // Touch devices don't get :hover, so tap-to-expand toggles a class instead.
+  wrap.addEventListener('click', (e) => {
+    if (!wrap.classList.contains('expanded')) {
+      wrap.classList.add('expanded');
+      setTimeout(() => map.invalidateSize(), 210);
+      e.stopPropagation();
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (wrap.classList.contains('expanded') && !wrap.contains(e.target)) {
+      wrap.classList.remove('expanded');
+      setTimeout(() => map.invalidateSize(), 210);
+    }
+  });
 }
 
-function submitGuess() {
-  if (!guessMarker) { alert("Click the map to place a guess first"); return; }
+function submitGuess(forced) {
+  if (!guessMarker) {
+    if (!forced) { alert("Click the map to place a guess first"); return; }
+    stopTimer();
+    document.getElementById("results-table").style.display = "none";
+    document.getElementById("next-btn").style.display = "inline-block";
+    document.getElementById("result-title").textContent = "Time's up!";
+    document.getElementById("result-detail").textContent = `+0 points · Total: ${totalScore}`;
+    document.getElementById("result").style.display = "flex";
+    return;
+  }
+  stopTimer();
   const guess = guessMarker.getLatLng();
   const dist = haversine(guess.lat, guess.lng, currentCoords.lat, currentCoords.lon);
   const points = scoreFromDistance(dist);
   totalScore += points;
   document.getElementById("score").textContent = totalScore;
+  saveSoloSession();
 
   actualMarker = L.marker([currentCoords.lat, currentCoords.lon], {
     icon: L.divIcon({ className: '', html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white"></div>' })
@@ -556,6 +840,7 @@ function nextRound() {
 
   round++;
   if (round > MAX_ROUNDS) {
+    clearSoloSession();
     document.getElementById("result-title").textContent = "Game over";
     document.getElementById("result-detail").textContent = `Final score: ${totalScore} / ${MAX_ROUNDS * 5000}`;
     document.getElementById("result").style.display = "flex";
@@ -579,12 +864,35 @@ function startGame() {
     alert("Set your token in the TOKEN constant near the top of the script first.");
     return;
   }
+  clearSoloSession();
   isMultiplayer = false;
+  round = 1; totalScore = 0;
+  document.getElementById("score").textContent = 0;
   document.getElementById("start-screen").style.display = "none";
   document.getElementById("game").style.display = "block";
   document.getElementById("player-list").style.display = "none";
   initMap();
   loadRound();
+}
+
+function resumeSoloSession(solo) {
+  isMultiplayer = false;
+  round = solo.round || 1;
+  totalScore = solo.totalScore || 0;
+  document.getElementById("start-screen").style.display = "none";
+  document.getElementById("game").style.display = "block";
+  document.getElementById("player-list").style.display = "none";
+  document.getElementById("score").textContent = totalScore;
+  document.getElementById("round").textContent = round;
+  document.getElementById("guess-btn").disabled = false;
+  if (!map) initMap();
+
+  const status = document.getElementById("loading");
+  status.style.display = "flex";
+  status.textContent = "Loading street view...";
+  currentCoords = (solo.lat != null && solo.lon != null) ? { lat: solo.lat, lon: solo.lon } : null;
+  mountViewer(solo.imageId, { onImage: () => { status.style.display = "none"; saveSoloSession(); } });
+  startTimer(SOLO_TIMEOUT_MS);
 }
 
 function showLobby() {
@@ -595,6 +903,7 @@ function showLobby() {
 
 function createRoom() {
   const name = document.getElementById("name-input").value.trim() || "Player";
+  myName = name;
   isMultiplayer = true;
   connectWS(() => ws.send(JSON.stringify({ type: "create_room", name })));
 }
@@ -603,8 +912,21 @@ function joinRoom(codeOverride) {
   const name = document.getElementById("name-input").value.trim() || "Player";
   const code = codeOverride || document.getElementById("join-code-input").value.trim().toUpperCase();
   if (!code) { alert("Enter a room code"); return; }
+  myName = name;
   isMultiplayer = true;
   connectWS(() => ws.send(JSON.stringify({ type: "join_room", name, code })));
+}
+
+function attemptRejoin(session) {
+  myName = session.name || "Player";
+  isMultiplayer = true;
+  document.getElementById("start-screen").style.display = "none";
+  document.getElementById("game").style.display = "block";
+  document.getElementById("player-list").style.display = "block";
+  document.getElementById("loading").style.display = "flex";
+  document.getElementById("loading").textContent = "Reconnecting...";
+  if (!map) initMap();
+  connectWS(() => ws.send(JSON.stringify({ type: "rejoin", code: session.code, token: session.token })));
 }
 
 document.getElementById("start-btn").addEventListener("click", startGame);
@@ -616,6 +938,16 @@ document.getElementById("host-start-btn").addEventListener("click", () => {
   document.getElementById("host-start-btn").style.display = "none";
   document.getElementById("lobby-status").textContent = "Starting...";
 });
+document.getElementById("copy-link-btn").addEventListener("click", () => {
+  const link = document.getElementById("lobby-link").textContent;
+  if (!link) return;
+  navigator.clipboard.writeText(link).then(() => {
+    const btn = document.getElementById("copy-link-btn");
+    const old = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  }).catch(() => {});
+});
 document.getElementById("guess-btn").addEventListener("click", () => {
   if (isMultiplayer) submitGuessMultiplayer(); else submitGuess();
 });
@@ -624,13 +956,24 @@ document.getElementById("next-btn").addEventListener("click", () => {
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
 });
 
-// Auto-join if opened via a shared room link (?room=CODE)
-(function checkRoomLink() {
+// On load: a shared room link takes priority, then a saved multiplayer
+// session (rejoin in place), then a saved solo session (resume same photo).
+(function initSession() {
   const params = new URLSearchParams(location.search);
   const roomCode = params.get("room");
   if (roomCode) {
     showLobby();
     document.getElementById("join-code-input").value = roomCode.toUpperCase();
+    return;
+  }
+  const mp = loadMPSession();
+  if (mp && mp.code && mp.token) {
+    attemptRejoin(mp);
+    return;
+  }
+  const solo = loadSoloSession();
+  if (solo && solo.imageId) {
+    resumeSoloSession(solo);
   }
 })();
 </script>
