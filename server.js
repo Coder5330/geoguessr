@@ -1,7 +1,12 @@
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import Protobuf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TOKEN = process.env.MAPILLARY_TOKEN;
 const PORT = process.env.PORT || 8080;
@@ -274,6 +279,19 @@ function maybeFinishRound(room) {
 // --- WebSocket wiring ---
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/' || req.url === '/index.html') {
+    const filePath = path.join(__dirname, 'geoguesser.html');
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('geoguesser.html not found next to server.js — make sure it was deployed alongside it.');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('GuessWhere multiplayer server is running.');
 });

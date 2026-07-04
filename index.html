@@ -91,8 +91,12 @@
 </div>
 
 <script>
-let TOKEN = "MLY|27265507996424109|85dc6bc5f9f09d5d067f65915297463c"; // hardcoded for convenience — don't share this file with the token in it
-const WS_URL = "wss://https://geoguessr-production-3a39.up.railway.app"; // e.g. wss://geoguesser-server-production.up.railway.app
+let TOKEN = "PASTE_YOUR_TOKEN_HERE"; // hardcoded for convenience — don't share this file with the token in it
+// Auto-detects the server's own address — works because the game is now served
+// from the same Railway app that runs the WebSocket server. If you ever open
+// this file locally instead (double-clicking it) rather than via the deployed
+// URL, set this to your Railway wss:// domain manually instead.
+const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 let map, guessMarker, actualMarker, connectLine, mlyViewer;
 let currentCoords = null;
 let round = 1;
