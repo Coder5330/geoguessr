@@ -280,11 +280,11 @@ function maybeFinishRound(room) {
 
 const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
-    const filePath = path.join(__dirname, 'geoguesser.html');
+    const filePath = path.join(__dirname, 'index.html');
     fs.readFile(filePath, (err, data) => {
       if (err) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
-        res.end('geoguesser.html not found next to server.js — make sure it was deployed alongside it.');
+        res.end('index.html not found next to server.js — make sure it was deployed alongside it.');
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
