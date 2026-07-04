@@ -186,9 +186,13 @@ async function findStartImageId(spot) {
 async function pickLocation(tried = []) {
   const remaining = SPOTS.filter(s => !tried.includes(s.name));
   if (remaining.length === 0) return null;
-  const spot = remaining[Math.floor(Math.random() * remaining.length)];
-  const loc = await findStartImageId(spot);
-  if (!loc) return pickLocation([...tried, spot.name]);
+  // Try a few candidate spots concurrently — a single spot's tile sometimes
+  // has no image coverage, and retrying those sequentially was the main
+  // source of slow round loads.
+  const batch = [...remaining].sort(() => Math.random() - 0.5).slice(0, 3);
+  const results = await Promise.all(batch.map(spot => findStartImageId(spot).catch(() => null)));
+  const loc = results.find(r => r);
+  if (!loc) return pickLocation([...tried, ...batch.map(s => s.name)]);
   return loc;
 }
 
@@ -396,6 +400,14 @@ wss.on('connection', (ws) => {
       room.guesses.set(id, { lat: msg.lat, lon: msg.lon });
       broadcastPlayers(room);
       maybeFinishRound(room);
+    }
+
+    else if (msg.type === 'leave_room') {
+      if (!room) return;
+      const player = room.players.get(id);
+      if (player) clearTimeout(player.disconnectTimer);
+      removePlayer(room, id);
+      room = null;
     }
   });
 

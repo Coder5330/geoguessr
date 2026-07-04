@@ -57,6 +57,7 @@
   .btn-secondary:hover { background: #7c4de0; }
   .btn-ghost {
     background: transparent; color: var(--text-dim); border: 1px solid var(--border); padding: 8px 16px; font-size: 13px;
+    cursor: pointer; margin-top: 4px;
   }
   .btn-ghost:hover { background: var(--panel-2); color: var(--text); }
 
@@ -85,6 +86,10 @@
     font-size: 14px; font-weight: 600; border: 1px solid var(--border); white-space: nowrap;
   }
   .hud-pill b, .hud-pill #score, .hud-pill #round { color: var(--accent); }
+  .hud-leave {
+    cursor: pointer; color: #fca5a5; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
+  }
+  .hud-leave:hover { background: rgba(239,68,68,0.3); }
 
   #timer {
     position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500;
@@ -176,6 +181,7 @@
       <div id="lobby-players" style="font-size:14px; color:#ccc;"></div>
       <button class="btn" id="host-start-btn" style="display:none">Start game</button>
       <p id="lobby-status" style="font-size:13px; color:var(--text-dim)">Waiting for host to start...</p>
+      <button class="btn-ghost" id="lobby-leave-btn">Leave</button>
     </div>
   </div>
 </div>
@@ -184,6 +190,7 @@
   <div id="hud">
     <div class="hud-pill">Round <span id="round">1</span>/5</div>
     <div class="hud-pill">Score <span id="score">0</span></div>
+    <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
   </div>
   <div id="timer" style="display:none">60</div>
   <div id="player-list" style="display:none"></div>
@@ -201,6 +208,7 @@
     <p id="result-detail"></p>
     <table id="results-table" style="display:none"></table>
     <button class="btn" id="next-btn">Next round</button>
+    <button class="btn-ghost" id="result-leave-btn">Leave</button>
   </div>
 </div>
 
@@ -439,21 +447,27 @@ function extractPreciseImageData(buf) {
   return out;
 }
 
+// Kicked off once at page load (during the start screen, not on the critical
+// path of a round) so by the time a round actually needs these, they're
+// already resolved from the module cache instead of costing a CDN round trip.
+const vectorTileModules = Promise.all([
+  import('https://esm.sh/pbf@3.2.1'),
+  import('https://esm.sh/@mapbox/vector-tile@1.3.1'),
+]).then(([pbfMod, vtMod]) => ({ Protobuf: pbfMod.default, VectorTile: vtMod.VectorTile }));
+
 // Find a real, precise (BigInt-safe) starting image id near a spot.
 // We use the standard vector-tile decoder for lon/lat (safe, no big integers
 // involved there) and our own manual parser for the id (must stay exact).
 async function findStartImageId(spot) {
   const t = lonLatToTile(spot.lon, spot.lat, 14);
   const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${t.z}/${t.x}/${t.y}?access_token=${TOKEN}`;
-  const res = await fetch(url);
+  const [res, { Protobuf, VectorTile }] = await Promise.all([fetch(url), vectorTileModules]);
   if (!res.ok) return null;
   const buf = new Uint8Array(await res.arrayBuffer());
 
   const imageData = extractPreciseImageData(buf);
   if (imageData.length === 0) return null;
 
-  const { default: Protobuf } = await import('https://esm.sh/pbf@3.2.1');
-  const { VectorTile } = await import('https://esm.sh/@mapbox/vector-tile@1.3.1');
   const tile = new VectorTile(new Protobuf(buf));
   const layer = tile.layers['image'];
   if (!layer || layer.length === 0) return null;
@@ -505,11 +519,15 @@ async function loadRound(tried = []) {
     return;
   }
 
-  const spot = remaining[Math.floor(Math.random() * remaining.length)];
+  // Try a few candidate spots concurrently instead of one at a time — a
+  // single spot's tile sometimes has no image coverage, and retrying those
+  // sequentially was the main source of slow round loads.
+  const batch = [...remaining].sort(() => Math.random() - 0.5).slice(0, 3);
 
   try {
-    const start = await findStartImageId(spot);
-    if (!start) return loadRound([...tried, spot.name]);
+    const results = await Promise.all(batch.map(spot => findStartImageId(spot).catch(() => null)));
+    const start = results.find(r => r);
+    if (!start) return loadRound([...tried, ...batch.map(s => s.name)]);
 
     currentCoords = { lat: start.lat, lon: start.lon };
     mountViewer(start.id, {
@@ -901,6 +919,43 @@ function showLobby() {
   document.getElementById("friends-btn").style.display = "none";
 }
 
+function leaveGame() {
+  if (!confirm("Leave the game?")) return;
+  stopTimer();
+  if (isMultiplayer && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "leave_room" }));
+    ws.close();
+  }
+  clearMPSession();
+  clearSoloSession();
+  resetToStartScreen();
+}
+
+function resetToStartScreen() {
+  isMultiplayer = false;
+  myId = null; hostId = null; currentRoomCode = null; myToken = null;
+  latestPlayers = [];
+  hasGuessedThisRound = false;
+  round = 1; totalScore = 0;
+  document.getElementById("score").textContent = 0;
+  document.getElementById("round").textContent = 1;
+  resetMapMarkers();
+
+  document.getElementById("game").style.display = "none";
+  document.getElementById("player-list").style.display = "none";
+  document.getElementById("result").style.display = "none";
+
+  document.getElementById("lobby").style.display = "none";
+  document.getElementById("lobby-create").style.display = "block";
+  document.getElementById("lobby-join").style.display = "block";
+  document.getElementById("lobby-join").previousElementSibling.style.display = "block";
+  document.getElementById("lobby-waiting").style.display = "none";
+  document.getElementById("start-btn").style.display = "inline-block";
+  document.getElementById("friends-btn").style.display = "inline-block";
+
+  document.getElementById("start-screen").style.display = "flex";
+}
+
 function createRoom() {
   const name = document.getElementById("name-input").value.trim() || "Player";
   myName = name;
@@ -951,6 +1006,9 @@ document.getElementById("copy-link-btn").addEventListener("click", () => {
 document.getElementById("guess-btn").addEventListener("click", () => {
   if (isMultiplayer) submitGuessMultiplayer(); else submitGuess();
 });
+document.getElementById("leave-btn").addEventListener("click", leaveGame);
+document.getElementById("lobby-leave-btn").addEventListener("click", leaveGame);
+document.getElementById("result-leave-btn").addEventListener("click", leaveGame);
 document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
