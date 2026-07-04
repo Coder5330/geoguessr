@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>GuessWhere Street</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link href="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.css" rel="stylesheet" />
+<script src="https://unpkg.com/mapillary-js@4.1.2/dist/mapillary.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, sans-serif; background: #111; color: #eee; height: 100vh; overflow: hidden; }
+  #start-screen { position: fixed; inset: 0; background: #111; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; z-index: 1000; padding: 20px; text-align: center; }
+  #start-screen input { width: 400px; max-width: 90vw; padding: 10px; font-size: 14px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; }
+  .btn { padding: 12px 28px; font-size: 15px; border-radius: 6px; border: none; background: #3b82f6; color: white; cursor: pointer; }
+  .btn:hover { background: #2563eb; }
+  #game { display: none; height: 100vh; position: relative; }
+  #photo-panel { height: 100vh; background: #000; position: relative; }
+  #mly { width: 100%; height: 100%; }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #888; text-align: center; padding: 20px; z-index: 5; background: #000; }
+  #map-wrap {
+    position: absolute; bottom: 16px; right: 16px; width: 220px; height: 150px;
+    border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    border: 2px solid rgba(255,255,255,0.3); z-index: 600;
+    transition: width 0.2s ease, height 0.2s ease; cursor: pointer;
+  }
+  #map-wrap:hover { width: 45vw; height: 45vh; }
+  #map { width: 100%; height: 100%; }
+  #hud { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 8px 14px; border-radius: 8px; font-size: 14px; z-index: 500; }
+  #guess-btn { position: absolute; bottom: 16px; left: 16px; z-index: 600; }
+  #result { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; z-index: 900; text-align: center; padding: 20px; }
+  #result h2 { margin: 0; font-size: 28px; }
+  #result p { margin: 0; color: #aaa; }
+  #lobby { display: none; flex-direction: column; gap: 14px; align-items: center; }
+  #lobby input { width: 280px; padding: 10px; font-size: 14px; border-radius: 6px; border: 1px solid #444; background: #222; color: #eee; text-align: center; }
+  #lobby-code { font-size: 32px; letter-spacing: 6px; font-weight: bold; background: #222; padding: 10px 20px; border-radius: 8px; }
+  #lobby-link { font-size: 12px; color: #999; word-break: break-all; max-width: 340px; }
+  .divider { color: #555; font-size: 13px; }
+  #player-list { position: absolute; top: 12px; right: 16px; background: rgba(0,0,0,0.7); padding: 10px 14px; border-radius: 8px; font-size: 13px; z-index: 500; min-width: 140px; }
+  #player-list .player-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  #player-list .guessed { color: #4ade80; }
+  #results-table { width: 100%; max-width: 340px; text-align: left; font-size: 14px; }
+  #results-table td { padding: 4px 6px; }
+</style>
+</head>
+<body>
+
+<div id="start-screen">
+  <h1 style="margin:0">GuessWhere Street</h1>
+  <p style="color:#999; max-width:420px; font-size:14px">Walk around a real street using the arrows, then guess where you are on the map.</p>
+  <button class="btn" id="start-btn">Play solo</button>
+  <div class="divider">or</div>
+  <button class="btn" id="friends-btn" style="background:#8b5cf6">Play with friends</button>
+
+  <div id="lobby">
+    <div id="lobby-create">
+      <input id="name-input" type="text" placeholder="Your name" maxlength="20" />
+      <button class="btn" id="create-room-btn" style="margin-top:8px">Create room</button>
+    </div>
+    <div class="divider">or</div>
+    <div id="lobby-join">
+      <input id="join-code-input" type="text" placeholder="Room code" maxlength="5" style="text-transform:uppercase" />
+      <button class="btn" id="join-room-btn" style="margin-top:8px">Join room</button>
+    </div>
+    <div id="lobby-waiting" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+      <div id="lobby-code"></div>
+      <div id="lobby-link"></div>
+      <div id="lobby-players" style="font-size:14px; color:#ccc;"></div>
+      <button class="btn" id="host-start-btn" style="display:none">Start game</button>
+      <p id="lobby-status" style="font-size:13px; color:#999">Waiting for host to start...</p>
+    </div>
+  </div>
+</div>
+
+<div id="game">
+  <div id="hud">Round <span id="round">1</span>/5 · Score <span id="score">0</span></div>
+  <div id="player-list" style="display:none"></div>
+  <div id="photo-panel">
+    <div id="loading">Loading street view...</div>
+    <div id="mly"></div>
+  </div>
+  <button id="guess-btn" class="btn">Guess</button>
+  <div id="map-wrap"><div id="map"></div></div>
+</div>
+
+<div id="result">
+  <h2 id="result-title"></h2>
+  <p id="result-detail"></p>
+  <table id="results-table" style="display:none"></table>
+  <button class="btn" id="next-btn">Next round</button>
+</div>
+
+<script>
+let TOKEN = "PASTE_YOUR_TOKEN_HERE"; // hardcoded for convenience — don't share this file with the token in it
+const WS_URL = "wss://PASTE_YOUR_RAILWAY_DOMAIN_HERE"; // e.g. wss://geoguesser-server-production.up.railway.app
+let map, guessMarker, actualMarker, connectLine, mlyViewer;
+let currentCoords = null;
+let round = 1;
+let totalScore = 0;
+const MAX_ROUNDS = 5;
+
+// --- Multiplayer state ---
+let ws = null;
+let myId = null;
+let hostId = null;
+let isMultiplayer = false;
+let hasGuessedThisRound = false;
+let latestPlayers = [];
+
+// Well-covered street locations to seed each round's search
+const SPOTS = [
+  { name: "New York", lat: 40.7580, lon: -73.9855 },
+  { name: "London", lat: 51.5100, lon: -0.1340 },
+  { name: "Paris", lat: 48.8698, lon: 2.3078 },
+  { name: "Tokyo", lat: 35.6595, lon: 139.7005 },
+  { name: "Amsterdam", lat: 52.3731, lon: 4.8926 },
+  { name: "Berlin", lat: 52.5163, lon: 13.3777 },
+  { name: "Barcelona", lat: 41.3809, lon: 2.1730 },
+  { name: "San Francisco", lat: 37.7897, lon: -122.4000 },
+  { name: "Sydney", lat: -33.8568, lon: 151.2153 },
+  { name: "Toronto", lat: 43.6544, lon: -79.3807 },
+  { name: "Madrid", lat: 40.4200, lon: -3.7025 },
+  { name: "Rome", lat: 41.8902, lon: 12.4922 },
+];
+
+function lonLatToTile(lon, lat, z) {
+  const n = Math.pow(2, z);
+  const x = Math.floor((lon + 180) / 360 * n);
+  const latRad = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+  return { x, y, z };
+}
+
+// --- Precise (BigInt-safe) vector tile parsing ---
+// Mapillary image IDs are 64-bit and JS numbers can't hold them exactly,
+// so we hand-parse just the "id" property as a BigInt instead of trusting
+// a standard decoder's lossy Number conversion.
+
+function readVarintNumber(buf, pos) {
+  let result = 0, shift = 0, b;
+  do { b = buf[pos.i++]; result += (b & 0x7f) * Math.pow(2, shift); shift += 7; } while (b >= 0x80);
+  return result;
+}
+function readVarintBigInt(buf, pos) {
+  let result = 0n, shift = 0n, b;
+  do { b = buf[pos.i++]; result |= BigInt(b & 0x7f) << shift; shift += 7n; } while (b >= 0x80);
+  return result;
+}
+function readTag(buf, pos) {
+  const v = readVarintNumber(buf, pos);
+  return { field: v >>> 3, wireType: v & 0x7 };
+}
+function skipField(buf, pos, wireType) {
+  if (wireType === 0) { while (buf[pos.i++] >= 0x80) {} }
+  else if (wireType === 2) { const len = readVarintNumber(buf, pos); pos.i += len; }
+  else if (wireType === 1) pos.i += 8;
+  else if (wireType === 5) pos.i += 4;
+}
+function parseValue(buf, start, end) {
+  const pos = { i: start };
+  let out = null, isBool = null;
+  while (pos.i < end) {
+    const { field, wireType } = readTag(buf, pos);
+    if ((field === 4 || field === 5 || field === 6) && wireType === 0) {
+      out = readVarintBigInt(buf, pos).toString();
+    } else if (field === 7 && wireType === 0) {
+      isBool = readVarintNumber(buf, pos) !== 0;
+    } else {
+      skipField(buf, pos, wireType);
+    }
+  }
+  return { str: out, bool: isBool };
+}
+function parseLayer(buf, start, end) {
+  const pos = { i: start };
+  let name = null;
+  const keys = [], values = [], features = [];
+  while (pos.i < end) {
+    const { field, wireType } = readTag(buf, pos);
+    if (field === 1 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      name = new TextDecoder().decode(buf.subarray(pos.i, pos.i + len));
+      pos.i += len;
+    } else if (field === 2 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      features.push({ start: pos.i, end: pos.i + len });
+      pos.i += len;
+    } else if (field === 3 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      keys.push(new TextDecoder().decode(buf.subarray(pos.i, pos.i + len)));
+      pos.i += len;
+    } else if (field === 4 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      values.push(parseValue(buf, pos.i, pos.i + len));
+      pos.i += len;
+    } else {
+      skipField(buf, pos, wireType);
+    }
+  }
+  return { name, keys, values, features };
+}
+function parseFeatureTags(buf, start, end) {
+  const pos = { i: start };
+  const tags = [];
+  while (pos.i < end) {
+    const { field, wireType } = readTag(buf, pos);
+    if (field === 2 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      const endT = pos.i + len;
+      while (pos.i < endT) tags.push(readVarintNumber(buf, pos));
+      pos.i = endT;
+    } else {
+      skipField(buf, pos, wireType);
+    }
+  }
+  return tags;
+}
+function parseTileLayers(buf) {
+  const pos = { i: 0 };
+  const layers = [];
+  while (pos.i < buf.length) {
+    const { field, wireType } = readTag(buf, pos);
+    if (field === 3 && wireType === 2) {
+      const len = readVarintNumber(buf, pos);
+      layers.push(parseLayer(buf, pos.i, pos.i + len));
+      pos.i += len;
+    } else {
+      skipField(buf, pos, wireType);
+    }
+  }
+  return layers;
+}
+function extractPreciseImageData(buf) {
+  const layers = parseTileLayers(buf);
+  const layer = layers.find(l => l.name === 'image');
+  if (!layer) return [];
+  const idKeyIdx = layer.keys.indexOf('id');
+  const panoKeyIdx = layer.keys.indexOf('is_pano');
+  if (idKeyIdx === -1) return [];
+  const out = [];
+  for (const feat of layer.features) {
+    const tags = parseFeatureTags(buf, feat.start, feat.end);
+    let id = null, isPano = false;
+    for (let i = 0; i < tags.length; i += 2) {
+      const key = tags[i], valIdx = tags[i + 1];
+      if (key === idKeyIdx && layer.values[valIdx]) id = layer.values[valIdx].str;
+      if (key === panoKeyIdx && layer.values[valIdx]) isPano = layer.values[valIdx].bool === true;
+    }
+    if (id) out.push({ id, isPano });
+  }
+  return out;
+}
+
+// Find a real, precise (BigInt-safe) starting image id near a spot.
+// We use the standard vector-tile decoder for lon/lat (safe, no big integers
+// involved there) and our own manual parser for the id (must stay exact).
+async function findStartImageId(spot) {
+  const t = lonLatToTile(spot.lon, spot.lat, 14);
+  const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${t.z}/${t.x}/${t.y}?access_token=${TOKEN}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const buf = new Uint8Array(await res.arrayBuffer());
+
+  const imageData = extractPreciseImageData(buf);
+  if (imageData.length === 0) return null;
+
+  const { default: Protobuf } = await import('https://esm.sh/pbf@3.2.1');
+  const { VectorTile } = await import('https://esm.sh/@mapbox/vector-tile@1.3.1');
+  const tile = new VectorTile(new Protobuf(buf));
+  const layer = tile.layers['image'];
+  if (!layer || layer.length === 0) return null;
+
+  // Both parses walk the layer's features in the same order, so index i in
+  // imageData corresponds to layer.feature(i).
+  const panoIndices = imageData.map((d, i) => d.isPano ? i : -1).filter(i => i !== -1);
+  const pool = panoIndices.length > 0 ? panoIndices : imageData.map((_, i) => i);
+
+  const idx = pool[Math.floor(Math.random() * pool.length)];
+  const feature = layer.feature(idx);
+  const gj = feature.toGeoJSON(t.x, t.y, t.z);
+  return {
+    id: imageData[idx].id,
+    lat: gj.geometry.coordinates[1],
+    lon: gj.geometry.coordinates[0],
+    isPano: imageData[idx].isPano,
+  };
+}
+
+async function loadRound(tried = []) {
+  const status = document.getElementById("loading");
+  status.style.display = "flex";
+  status.textContent = "Loading street view...";
+  document.getElementById("round").textContent = round;
+
+  const remaining = SPOTS.filter(s => !tried.includes(s.name));
+  if (remaining.length === 0) {
+    status.textContent = "Couldn't find coverage right now. Try again.";
+    return;
+  }
+
+  const spot = remaining[Math.floor(Math.random() * remaining.length)];
+
+  try {
+    const start = await findStartImageId(spot);
+    if (!start) return loadRound([...tried, spot.name]);
+
+    currentCoords = { lat: start.lat, lon: start.lon };
+
+    if (mlyViewer) { mlyViewer.remove(); mlyViewer = null; }
+    mlyViewer = new mapillary.Viewer({
+      accessToken: TOKEN,
+      container: 'mly',
+      imageId: start.id,
+      component: { cover: false },
+    });
+
+    mlyViewer.on('image', (event) => {
+      // Update "true" location as the player walks, so scoring reflects where
+      // they end up looking from, not just the starting point.
+      if (event.image && event.image.lngLat) {
+        currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
+      }
+      status.style.display = "none";
+    });
+  } catch (err) {
+    status.textContent = "Error: " + err.message;
+  }
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function scoreFromDistance(km) {
+  return Math.round(5000 * Math.exp(-km / 2000));
+}
+
+function connectWS(onOpen) {
+  if (!WS_URL || WS_URL.includes("PASTE_YOUR")) {
+    alert("Set WS_URL near the top of the script to your deployed Railway domain first.");
+    return;
+  }
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => onOpen && onOpen();
+  ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
+  ws.onclose = () => { document.getElementById("lobby-status").textContent = "Disconnected from server."; };
+  ws.onerror = () => { document.getElementById("lobby-status").textContent = "Connection error — check WS_URL and that the server is running."; };
+}
+
+function handleWSMessage(msg) {
+  if (msg.type === "room_created") {
+    myId = msg.id; hostId = msg.hostId;
+    document.getElementById("lobby-create").style.display = "none";
+    document.getElementById("lobby-join").previousElementSibling.style.display = "none";
+    document.getElementById("lobby-join").style.display = "none";
+    document.getElementById("lobby-waiting").style.display = "flex";
+    document.getElementById("lobby-code").textContent = msg.code;
+    const link = `${location.origin}${location.pathname}?room=${msg.code}`;
+    document.getElementById("lobby-link").textContent = link;
+    document.getElementById("host-start-btn").style.display = "inline-block";
+    document.getElementById("lobby-status").textContent = "Share the code or link. Start whenever you're ready.";
+  }
+
+  else if (msg.type === "room_joined") {
+    myId = msg.id; hostId = msg.hostId;
+    document.getElementById("lobby-create").style.display = "none";
+    document.getElementById("lobby-join").previousElementSibling.style.display = "none";
+    document.getElementById("lobby-join").style.display = "none";
+    document.getElementById("lobby-waiting").style.display = "flex";
+    document.getElementById("lobby-code").textContent = msg.code;
+    document.getElementById("lobby-link").textContent = "";
+    document.getElementById("lobby-status").textContent = "Waiting for host to start...";
+  }
+
+  else if (msg.type === "players") {
+    latestPlayers = msg.players;
+    hostId = msg.hostId;
+    renderLobbyPlayers();
+    renderInGamePlayers();
+    if (myId === hostId) document.getElementById("host-start-btn").style.display = "inline-block";
+  }
+
+  else if (msg.type === "round_loading") {
+    if (document.getElementById("game").style.display !== "block") {
+      document.getElementById("start-screen").style.display = "none";
+      document.getElementById("game").style.display = "block";
+      document.getElementById("player-list").style.display = "block";
+      if (!map) initMap();
+    }
+    document.getElementById("loading").style.display = "flex";
+    document.getElementById("loading").textContent = "Loading next location...";
+    document.getElementById("round").textContent = msg.round;
+    hasGuessedThisRound = false;
+    resetMapMarkers();
+  }
+
+  else if (msg.type === "round_start") {
+    document.getElementById("round").textContent = msg.round;
+    loadImageIntoViewer(msg.imageId);
+  }
+
+  else if (msg.type === "round_result") {
+    showMultiplayerResult(msg);
+  }
+
+  else if (msg.type === "game_over") {
+    showMultiplayerGameOver(msg);
+  }
+
+  else if (msg.type === "error") {
+    alert(msg.message);
+  }
+}
+
+function renderLobbyPlayers() {
+  const el = document.getElementById("lobby-players");
+  if (!el) return;
+  el.innerHTML = latestPlayers.map(p => `${p.name}${p.id === hostId ? " (host)" : ""}`).join("<br>");
+}
+
+function renderInGamePlayers() {
+  const el = document.getElementById("player-list");
+  if (!isMultiplayer) return;
+  el.innerHTML = latestPlayers
+    .map(p => `<div class="player-row"><span>${p.name}</span><span class="${p.guessed ? 'guessed' : ''}">${p.guessed ? 'guessed' : p.score}</span></div>`)
+    .join("");
+}
+
+function loadImageIntoViewer(imageId) {
+  const status = document.getElementById("loading");
+  if (mlyViewer) { mlyViewer.remove(); mlyViewer = null; }
+  mlyViewer = new mapillary.Viewer({
+    accessToken: TOKEN,
+    container: 'mly',
+    imageId: imageId,
+    component: { cover: false },
+  });
+  mlyViewer.on('image', (event) => {
+    if (event.image && event.image.lngLat) {
+      currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
+    }
+    status.style.display = "none";
+  });
+}
+
+function resetMapMarkers() {
+  if (!map) return;
+  if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+  if (actualMarker) { map.removeLayer(actualMarker); actualMarker = null; }
+  if (connectLine) { map.removeLayer(connectLine); connectLine = null; }
+  map.setView([20, 0], 2);
+}
+
+function showMultiplayerResult(msg) {
+  const me = msg.results.find(r => r.id === myId);
+  document.getElementById("result-title").textContent = me && me.dist != null
+    ? `${Math.round(me.dist)} km away`
+    : "No guess submitted";
+  document.getElementById("result-detail").textContent = me ? `+${me.points} points this round` : "";
+
+  const table = document.getElementById("results-table");
+  table.style.display = "table";
+  const sorted = [...msg.results].sort((a, b) => b.total - a.total);
+  table.innerHTML = sorted.map(r =>
+    `<tr><td>${r.name}</td><td>${r.dist != null ? Math.round(r.dist) + ' km' : '—'}</td><td>+${r.points}</td><td><b>${r.total}</b></td></tr>`
+  ).join("");
+
+  if (msg.actual && map) {
+    resetMapMarkers();
+    actualMarker = L.marker([msg.actual.lat, msg.actual.lon], {
+      icon: L.divIcon({ className: '', html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white"></div>' })
+    }).addTo(map);
+    map.setView([msg.actual.lat, msg.actual.lon], 4);
+  }
+
+  const btn = document.getElementById("next-btn");
+  if (myId === hostId) {
+    btn.style.display = "inline-block";
+    btn.textContent = msg.round >= msg.maxRounds ? "See final results" : "Next round";
+    btn.onclick = () => ws.send(JSON.stringify({ type: "start_round" }));
+  } else {
+    btn.style.display = "none";
+  }
+  document.getElementById("result").style.display = "flex";
+}
+
+function showMultiplayerGameOver(msg) {
+  document.getElementById("result").style.display = "flex";
+  document.getElementById("result-title").textContent = "Game over";
+  document.getElementById("result-detail").textContent = "";
+  const table = document.getElementById("results-table");
+  table.style.display = "table";
+  const sorted = [...msg.players].sort((a, b) => b.score - a.score);
+  table.innerHTML = sorted.map((p, i) => `<tr><td>#${i + 1}</td><td>${p.name}</td><td><b>${p.score}</b></td></tr>`).join("");
+  const btn = document.getElementById("next-btn");
+  btn.style.display = "none";
+}
+
+function submitGuessMultiplayer() {
+  if (!guessMarker) { alert("Click the map to place a guess first"); return; }
+  if (hasGuessedThisRound) return;
+  hasGuessedThisRound = true;
+  const guess = guessMarker.getLatLng();
+  ws.send(JSON.stringify({ type: "submit_guess", lat: guess.lat, lon: guess.lng }));
+  document.getElementById("loading").style.display = "flex";
+  document.getElementById("loading").textContent = "Guess submitted — waiting for other players...";
+}
+
+function initMap() {
+  map = L.map('map').setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+  map.on('click', (e) => {
+    if (guessMarker) map.removeLayer(guessMarker);
+    guessMarker = L.marker(e.latlng).addTo(map);
+  });
+  const wrap = document.getElementById('map-wrap');
+  wrap.addEventListener('mouseenter', () => setTimeout(() => map.invalidateSize(), 210));
+  wrap.addEventListener('mouseleave', () => setTimeout(() => map.invalidateSize(), 210));
+}
+
+function submitGuess() {
+  if (!guessMarker) { alert("Click the map to place a guess first"); return; }
+  const guess = guessMarker.getLatLng();
+  const dist = haversine(guess.lat, guess.lng, currentCoords.lat, currentCoords.lon);
+  const points = scoreFromDistance(dist);
+  totalScore += points;
+  document.getElementById("score").textContent = totalScore;
+
+  actualMarker = L.marker([currentCoords.lat, currentCoords.lon], {
+    icon: L.divIcon({ className: '', html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white"></div>' })
+  }).addTo(map);
+  connectLine = L.polyline([guess, [currentCoords.lat, currentCoords.lon]], { color: '#ef4444', dashArray: '4' }).addTo(map);
+  map.fitBounds(connectLine.getBounds(), { padding: [40, 40] });
+
+  document.getElementById("results-table").style.display = "none";
+  document.getElementById("next-btn").style.display = "inline-block";
+  document.getElementById("result-title").textContent = `${Math.round(dist)} km away`;
+  document.getElementById("result-detail").textContent = `+${points} points · Total: ${totalScore}`;
+  document.getElementById("result").style.display = "flex";
+}
+
+function nextRound() {
+  document.getElementById("result").style.display = "none";
+  if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+  if (actualMarker) { map.removeLayer(actualMarker); actualMarker = null; }
+  if (connectLine) { map.removeLayer(connectLine); connectLine = null; }
+  map.setView([20, 0], 2);
+
+  round++;
+  if (round > MAX_ROUNDS) {
+    document.getElementById("result-title").textContent = "Game over";
+    document.getElementById("result-detail").textContent = `Final score: ${totalScore} / ${MAX_ROUNDS * 5000}`;
+    document.getElementById("result").style.display = "flex";
+    const btn = document.getElementById("next-btn");
+    btn.textContent = "Play again";
+    btn.onclick = () => {
+      round = 1; totalScore = 0;
+      document.getElementById("score").textContent = 0;
+      document.getElementById("result").style.display = "none";
+      btn.textContent = "Next round";
+      btn.onclick = nextRound;
+      loadRound();
+    };
+    return;
+  }
+  loadRound();
+}
+
+function startGame() {
+  if (!TOKEN.startsWith("MLY|")) {
+    alert("Set your token in the TOKEN constant near the top of the script first.");
+    return;
+  }
+  isMultiplayer = false;
+  document.getElementById("start-screen").style.display = "none";
+  document.getElementById("game").style.display = "block";
+  document.getElementById("player-list").style.display = "none";
+  initMap();
+  loadRound();
+}
+
+function showLobby() {
+  document.getElementById("lobby").style.display = "flex";
+  document.getElementById("start-btn").style.display = "none";
+  document.getElementById("friends-btn").style.display = "none";
+}
+
+function createRoom() {
+  const name = document.getElementById("name-input").value.trim() || "Player";
+  isMultiplayer = true;
+  connectWS(() => ws.send(JSON.stringify({ type: "create_room", name })));
+}
+
+function joinRoom(codeOverride) {
+  const name = document.getElementById("name-input").value.trim() || "Player";
+  const code = codeOverride || document.getElementById("join-code-input").value.trim().toUpperCase();
+  if (!code) { alert("Enter a room code"); return; }
+  isMultiplayer = true;
+  connectWS(() => ws.send(JSON.stringify({ type: "join_room", name, code })));
+}
+
+document.getElementById("start-btn").addEventListener("click", startGame);
+document.getElementById("friends-btn").addEventListener("click", showLobby);
+document.getElementById("create-room-btn").addEventListener("click", createRoom);
+document.getElementById("join-room-btn").addEventListener("click", () => joinRoom());
+document.getElementById("host-start-btn").addEventListener("click", () => {
+  ws.send(JSON.stringify({ type: "start_round" }));
+  document.getElementById("host-start-btn").style.display = "none";
+  document.getElementById("lobby-status").textContent = "Starting...";
+});
+document.getElementById("guess-btn").addEventListener("click", () => {
+  if (isMultiplayer) submitGuessMultiplayer(); else submitGuess();
+});
+document.getElementById("next-btn").addEventListener("click", () => {
+  if (!isMultiplayer) nextRound();
+  // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
+});
+
+// Auto-join if opened via a shared room link (?room=CODE)
+(function checkRoomLink() {
+  const params = new URLSearchParams(location.search);
+  const roomCode = params.get("room");
+  if (roomCode) {
+    showLobby();
+    document.getElementById("join-code-input").value = roomCode.toUpperCase();
+  }
+})();
+</script>
+
+</body>
+</html>
