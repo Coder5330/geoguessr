@@ -90,9 +90,16 @@
      exceed half the screen and collide with the centered timer. Flex with
      wrap keeps everything laid out relative to each other so nothing overlaps,
      and lets pieces wrap to a second line if they truly don't fit. */
+  /* Mapillary's own viewer draws its built-in controls (compass, zoom,
+     sequence arrows) somewhere inside #mly, underneath these overlays. Round/
+     Score/Timer are purely informational — they have no click handlers — so
+     they're click-through by default; only the Leave button opts back in to
+     receiving clicks. This way our HUD never blocks Mapillary's controls
+     no matter where it decides to place them. */
   #hud {
     position: absolute; top: 14px; left: 14px; right: 14px; z-index: 500;
     display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    pointer-events: none;
   }
   .hud-group { display: flex; gap: 8px; flex-wrap: wrap; }
   .hud-pill {
@@ -102,11 +109,12 @@
   .hud-pill b, .hud-pill #score, .hud-pill #round { color: var(--accent); }
   .hud-leave {
     cursor: pointer; color: #fca5a5; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
+    pointer-events: auto;
   }
   .hud-leave:hover { background: rgba(239,68,68,0.3); }
 
   #timer {
-    z-index: 500; position: relative; left: 40px;
+    z-index: 500; pointer-events: none;
     background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); border: 1px solid var(--border);
     border-radius: 999px; padding: 8px 18px; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums;
     color: var(--accent); transition: color 0.2s ease, border-color 0.2s ease;
@@ -148,7 +156,7 @@
   #player-list {
     position: absolute; top: 14px; right: 16px; background: rgba(15,18,25,0.85); backdrop-filter: blur(6px);
     padding: 12px 16px; border-radius: 12px; font-size: 13px; z-index: 500; min-width: 150px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border); pointer-events: none;
   }
   #player-list .player-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
   #player-list .player-row.host span:first-child::before { content: "\1F451 "; }
@@ -164,7 +172,7 @@
     #map-wrap.expanded { width: 78vw; height: 46vh; }
     #map-wrap.result-view { top: 10px; left: 10px; right: 10px; bottom: 230px; }
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
-    #timer { font-size: 13px; padding: 6px 12px; left: 15px; }
+    #timer { font-size: 13px; padding: 6px 12px; }
     #result { padding: 14px 16px; }
   }
 </style>
