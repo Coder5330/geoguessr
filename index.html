@@ -84,9 +84,17 @@
   }
   #map { width: 100%; height: 100%; }
 
+  /* A single flex row spanning the full width, instead of independently
+     absolute-positioned pieces (HUD pills anchored left, timer centered via
+     left:50%) — on narrow phone screens the HUD row's width alone could
+     exceed half the screen and collide with the centered timer. Flex with
+     wrap keeps everything laid out relative to each other so nothing overlaps,
+     and lets pieces wrap to a second line if they truly don't fit. */
   #hud {
-    position: absolute; top: 14px; left: 14px; z-index: 500; display: flex; gap: 8px;
+    position: absolute; top: 14px; left: 14px; right: 14px; z-index: 500;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   }
+  .hud-group { display: flex; gap: 8px; flex-wrap: wrap; }
   .hud-pill {
     background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); padding: 8px 16px; border-radius: 999px;
     font-size: 14px; font-weight: 600; border: 1px solid var(--border); white-space: nowrap;
@@ -98,7 +106,7 @@
   .hud-leave:hover { background: rgba(239,68,68,0.3); }
 
   #timer {
-    position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500;
+    z-index: 500;
     background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); border: 1px solid var(--border);
     border-radius: 999px; padding: 8px 18px; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums;
     color: var(--accent); transition: color 0.2s ease, border-color 0.2s ease;
@@ -196,11 +204,13 @@
 
 <div id="game">
   <div id="hud">
-    <div class="hud-pill">Round <span id="round">1</span>/5</div>
-    <div class="hud-pill">Score <span id="score">0</span></div>
+    <div class="hud-group">
+      <div class="hud-pill">Round <span id="round">1</span>/5</div>
+      <div class="hud-pill">Score <span id="score">0</span></div>
+    </div>
+    <div id="timer" style="display:none">60</div>
     <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
   </div>
-  <div id="timer" style="display:none">60</div>
   <div id="player-list" style="display:none"></div>
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
@@ -1013,15 +1023,28 @@ function resetToStartScreen() {
   document.getElementById("start-screen").style.display = "flex";
 }
 
+function requireName() {
+  const input = document.getElementById("name-input");
+  const name = input.value.trim();
+  if (!name) {
+    alert("Enter your name first");
+    input.focus();
+    return null;
+  }
+  return name;
+}
+
 function createRoom() {
-  const name = document.getElementById("name-input").value.trim() || "Player";
+  const name = requireName();
+  if (!name) return;
   myName = name;
   isMultiplayer = true;
   connectWS(() => ws.send(JSON.stringify({ type: "create_room", name })));
 }
 
 function joinRoom(codeOverride) {
-  const name = document.getElementById("name-input").value.trim() || "Player";
+  const name = requireName();
+  if (!name) return;
   const code = codeOverride || document.getElementById("join-code-input").value.trim().toUpperCase();
   if (!code) { alert("Enter a room code"); return; }
   myName = name;
