@@ -592,8 +592,8 @@ function mountViewer(imageId, { onImage } = {}) {
     resetNavAvailability();
     if (onImage) onImage();
   });
-  mlyViewer.on('sequenceedges', (event) => addNavDirections(event.status));
-  mlyViewer.on('spatialedges', (event) => addNavDirections(event.status));
+  mlyViewer.on('sequenceedges', (event) => setNavSequenceEdges(event.status));
+  mlyViewer.on('spatialedges', (event) => setNavSpatialEdges(event.status));
   mlyViewer.on('bearing', (event) => { navBearingDeg = event.bearing; updateNavSlots(); });
 }
 
@@ -611,7 +611,11 @@ function mountViewer(imageId, { onImage } = {}) {
 //    while hovering the photo, appears only over a zone that currently has
 //    a direction, and clicking (not dragging) moves you there.
 
-let navEdges = []; // {direction, worldMotionAzimuth} edges for the CURRENT image only
+// Sequence and spatial edges are reported by separate events, each of which
+// can refire more than once as caching completes — tracked separately and
+// replaced (not appended) so a repeat firing can't pile up stale duplicates.
+let navSequenceEdges = [];
+let navSpatialEdges = [];
 let navBearingDeg = 0; // current view bearing, degrees clockwise from north
 let navLastPoint = null; // last known {x,y} client coords while hovering, or null
 let navPointerDownAt = null;
@@ -623,12 +627,18 @@ function tryMoveNavSlot(slotEl) {
 }
 
 function resetNavAvailability() {
-  navEdges = [];
+  navSequenceEdges = [];
+  navSpatialEdges = [];
   updateNavSlots();
 }
-function addNavDirections(status) {
+function setNavSequenceEdges(status) {
   if (!status.cached) return;
-  for (const edge of status.edges) navEdges.push(edge);
+  navSequenceEdges = status.edges;
+  updateNavSlots();
+}
+function setNavSpatialEdges(status) {
+  if (!status.cached) return;
+  navSpatialEdges = status.edges;
   updateNavSlots();
 }
 
@@ -664,7 +674,7 @@ function navSlotForEdge(edge) {
 }
 function updateNavSlots() {
   const best = { up: null, down: null, left: null, right: null };
-  for (const edge of navEdges) {
+  for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
     const slot = navSlotForEdge(edge);
     if (!best[slot] || navPriority(edge.data.direction) < navPriority(best[slot].data.direction)) {
       best[slot] = edge;
@@ -695,8 +705,39 @@ function hideNavHover() {
   document.getElementById('nav-hover').style.display = 'none';
   document.getElementById('photo-panel').style.cursor = '';
 }
+// The panel-wide quadrant test is based on distance from the WHOLE photo's
+// center — but the .nav-slot cluster sits low, near the bottom edge, so a
+// click physically ON one of those arrows still geometrically falls in the
+// "down" quadrant of the full panel. Without this check, every arrow click
+// fired a second, usually-wrong moveDir alongside the correct direct one
+// (that's the "clicking one arrow breaks the others" bug) — so any
+// interaction that targets the cluster (or the hover badge) is left
+// entirely to their own dedicated handlers instead.
+function isNavClusterTarget(target) {
+  return !!(target && target.closest && target.closest('.nav-slot, #nav-hover'));
+}
+// A padded bounding box around whichever arrows are currently visible, so
+// "near" means the general cluster area rather than requiring the cursor to
+// land on one specific 28px icon.
+function nearNavCluster(clientX, clientY) {
+  const pad = 24;
+  let minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity, any = false;
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    const el = document.getElementById('nav-' + slot);
+    if (el.style.display === 'none') continue;
+    const r = el.getBoundingClientRect();
+    minLeft = Math.min(minLeft, r.left); minTop = Math.min(minTop, r.top);
+    maxRight = Math.max(maxRight, r.right); maxBottom = Math.max(maxBottom, r.bottom);
+    any = true;
+  }
+  if (!any) return false;
+  return clientX >= minLeft - pad && clientX <= maxRight + pad && clientY >= minTop - pad && clientY <= maxBottom + pad;
+}
 function handleNavHoverAt(clientX, clientY) {
   if (!navMovementEnabled) { hideNavHover(); return; }
+  // Don't show the hover badge near the always-visible arrows — they're
+  // already directly clickable, so a second control right on top is just clutter.
+  if (nearNavCluster(clientX, clientY)) { hideNavHover(); return; }
   const panel = document.getElementById('photo-panel');
   const rect = panel.getBoundingClientRect();
   const zone = navHoverZoneFor(rect, clientX, clientY);
@@ -727,12 +768,13 @@ function refreshNavHover() {
     hideNavHover();
   });
   panel.addEventListener('pointerdown', (e) => {
+    if (isNavClusterTarget(e.target)) { navPointerDownAt = null; return; }
     navPointerDownAt = { x: e.clientX, y: e.clientY };
   });
   panel.addEventListener('pointerup', (e) => {
     const start = navPointerDownAt;
     navPointerDownAt = null;
-    if (!start) return;
+    if (!start || isNavClusterTarget(e.target)) return;
     // Ignore drags (looking around) — only a near-stationary press counts as
     // a click-to-move, same distinction Mapillary's own pointer component
     // effectively makes between rotating the view and clicking a control.
