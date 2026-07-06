@@ -968,25 +968,39 @@ let navLastPoint = null; // last known {x,y} client coords while hovering, or nu
 let navPointerDownAt = null;
 let roundActive = true; // false once results are showing — blocks both nav movement and placing/moving the guess pin
 
-async function tryMoveNavSlot(slot) {
-  if (!roundActive || !mlyViewer) return;
-  // Don't trust the cached navBearingDeg here — it only updates when the
-  // 'bearing' event fires, which can lag behind an active drag. Fetch the
-  // viewer's actual live bearing right now and recompute which edge belongs
-  // in this slot at THIS exact moment, so the move always matches whatever
-  // you were just looking at when you clicked, not a stale snapshot.
-  let bearingDeg = navBearingDeg;
-  try { bearingDeg = await mlyViewer.getBearing(); } catch {}
-  const edge = bestEdgeForSlot(slot, bearingDeg);
-  if (!edge) return;
-  // Navigate to the edge's SPECIFIC target image, not moveDir(direction).
-  // moveDir re-selects an edge by direction enum inside Mapillary, and on
-  // panoramas several edges share the same enum (e.g. the road ahead AND
-  // behind are both Spherical) — so moveDir could follow a different edge
-  // than the one we resolved as being in the clicked direction, sending you
-  // the wrong way. moveTo(targetImageId) is unambiguous.
+// Only edges that carry a real bearing are usable for "go in the direction I
+// clicked": sequence Next/Prev have NaN azimuth (their real-world direction is
+// unknown — they're just capture order), and treating them as forward/back was
+// a source of occasional wrong-way moves. Spatial edges (StepForward, Turn,
+// Spherical, …) all carry a true worldMotionAzimuth.
+function edgesForNav() {
+  return [...navSpatialEdges, ...navSequenceEdges].filter(e => isFinite(e.data.worldMotionAzimuth));
+}
+// Navigate to an edge's SPECIFIC target image (not moveDir(direction), which
+// re-selects an edge by direction enum inside Mapillary — and on panoramas
+// several edges share the same enum, e.g. the road ahead AND behind are both
+// Spherical, so moveDir could follow the wrong one). moveTo is unambiguous.
+function moveToEdge(edge) {
+  if (!edge || !roundActive || !mlyViewer) return;
   if (edge.target) mlyViewer.moveTo(edge.target).catch(() => {});
   else mlyViewer.moveDir(edge.data.direction).catch(() => {});
+}
+// Click-to-move: pick the navigable edge whose true real-world direction is
+// closest to where on the photo you clicked (evaluated against the LIVE view
+// bearing, not a possibly-stale cached one), and go to that exact image. No
+// slot buckets in between — the click maps straight to the nearest real edge.
+async function moveNearestEdgeToClick(clientX, clientY) {
+  if (!roundActive || !mlyViewer) return;
+  const rect = document.getElementById('photo-panel').getBoundingClientRect();
+  const clickAngle = navPointAngle(rect, clientX, clientY);
+  let bearingDeg = navBearingDeg;
+  try { bearingDeg = await mlyViewer.getBearing(); } catch {}
+  let best = null, bestDiff = Infinity;
+  for (const edge of edgesForNav()) {
+    const diff = navAngleDiff(clickAngle, navRelativeAngleForEdge(edge, bearingDeg));
+    if (diff < bestDiff) { bestDiff = diff; best = edge; }
+  }
+  if (best && bestDiff <= 75) moveToEdge(best); // ignore clicks nowhere near a real path
 }
 
 function resetNavAvailability() {
@@ -1005,14 +1019,6 @@ function setNavSpatialEdges(status) {
   updateNavSlots();
 }
 
-// Prefer actual spatial steps/turns over sequence Next/Prev (which carry no
-// real bearing) or the more exotic spherical/similar edge types.
-function navPriority(direction) {
-  const D = mapillary.NavigationDirection;
-  const order = [D.StepForward, D.StepBackward, D.StepLeft, D.StepRight, D.TurnLeft, D.TurnRight, D.Next, D.Prev, D.Spherical, D.Similar];
-  const idx = order.indexOf(direction);
-  return idx === -1 ? order.length : idx;
-}
 // Same conversion Mapillary's own internal Spatial utility uses to turn a raw
 // azimuthal angle (radians) into a compass bearing (degrees clockwise from north).
 function azimuthToBearingDeg(azimuthRad) {
@@ -1036,14 +1042,6 @@ function navRelativeAngleForEdge(edge, bearingDeg) {
 // recomputed fresh against the viewer's live bearing right when a click
 // actually executes a move, so a move can never use an out-of-date rotation
 // snapshot from a lagging 'bearing' event.
-function bestEdgeForSlot(slot, bearingDeg) {
-  let best = null;
-  for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
-    if (navSlotForAngle(navRelativeAngleForEdge(edge, bearingDeg)) !== slot) continue;
-    if (!best || navPriority(edge.data.direction) < navPriority(best.data.direction)) best = edge;
-  }
-  return best;
-}
 function navSlotForAngle(relative) {
   const abs = Math.abs(relative);
   if (abs <= 45) return 'up';
@@ -1063,10 +1061,14 @@ function navRotationForAngle(relative) {
 function updateNavSlots() {
   const best = { up: null, down: null, left: null, right: null };
   const bestAngle = { up: null, down: null, left: null, right: null };
-  for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
+  // Only spatial (real-bearing) edges become arrows — same reason as
+  // edgesForNav(): sequence Next/Prev have no real direction. Within a slot,
+  // keep whichever edge points closest to the slot's centre so the arrow that
+  // shows is the most representative one.
+  for (const edge of edgesForNav()) {
     const relative = navRelativeAngleForEdge(edge, navBearingDeg);
     const slot = navSlotForAngle(relative);
-    if (!best[slot] || navPriority(edge.data.direction) < navPriority(best[slot].data.direction)) {
+    if (best[slot] === null || Math.abs(relative) < Math.abs(bestAngle[slot])) {
       best[slot] = edge;
       bestAngle[slot] = relative;
     }
@@ -1075,7 +1077,7 @@ function updateNavSlots() {
     const el = document.getElementById('nav-' + slot);
     if (best[slot]) {
       el.style.display = 'block';
-      el.dataset.direction = String(best[slot].data.direction);
+      el._navEdge = best[slot]; // exact edge this arrow represents — clicked directly
       el.dataset.angle = String(bestAngle[slot]);
       // Rotate to the edge's actual bearing, not just a fixed per-slot
       // rotation — a "forward" path that's slightly off-center should visibly
@@ -1083,7 +1085,7 @@ function updateNavSlots() {
       el.style.transform = `translateX(-50%) rotate(${navRotationForAngle(bestAngle[slot])}deg)`;
     } else {
       el.style.display = 'none';
-      delete el.dataset.direction;
+      el._navEdge = null;
       delete el.dataset.angle;
     }
   }
@@ -1192,15 +1194,17 @@ function refreshNavHover() {
     // a click-to-move, same distinction Mapillary's own pointer component
     // effectively makes between rotating the view and clicking a control.
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
-    const zone = navClosestSlotFor(e.clientX, e.clientY);
-    if (zone) tryMoveNavSlot(zone);
+    // Go to whichever real path is nearest the click direction — no slot
+    // bucket in between (that indirection could resolve a different edge than
+    // the one you pointed at).
+    moveNearestEdgeToClick(e.clientX, e.clientY);
   });
-  // The plain always-visible arrows are directly clickable too, not just
-  // reachable by hovering anywhere in their quadrant of the photo.
+  // The always-visible arrows are directly clickable too — each moves to the
+  // exact edge it's currently showing (WYSIWYG: you go where the arrow points).
   for (const slot of ['up', 'down', 'left', 'right']) {
     document.getElementById('nav-' + slot).addEventListener('click', (e) => {
       e.stopPropagation();
-      tryMoveNavSlot(slot);
+      moveToEdge(document.getElementById('nav-' + slot)._navEdge);
     });
   }
 })();
