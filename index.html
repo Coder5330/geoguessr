@@ -130,9 +130,10 @@
 
   /* Two-tier movement cue, replacing Mapillary's built-in direction arrows
      (which faded in/out unpredictably as edge data loaded):
-     1. .nav-slot — plain, always-visible, non-interactive arrows clustered
-        at bottom-center, just indicating which directions currently exist.
-     2. #nav-hover — the actual interactive control: a styled circular badge
+     1. .nav-slot — plain arrows clustered in a plus/cross layout above the
+        Guess button, directly clickable, indicating which directions
+        currently exist.
+     2. #nav-hover — an additional interactive cue: a styled circular badge
         that follows the cursor while hovering the photo and only appears
         over a zone that has a navigable direction; clicking moves there.
      Which real direction occupies each of the four zones (up/down/left/
@@ -140,13 +141,19 @@
      your current view bearing, so it stays correct as you drag to look
      around — see the nav-* JS below. */
   .nav-slot {
-    position: absolute; bottom: 90px; display: none; z-index: 50; width: 28px; pointer-events: none;
+    position: absolute; display: none; z-index: 50; width: 28px; cursor: pointer;
     filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
   }
-  #nav-left { left: calc(50% - 60px); }
-  #nav-down { left: calc(50% - 20px); }
-  #nav-up { left: calc(50% + 20px); }
-  #nav-right { left: calc(50% + 60px); }
+  .nav-slot:hover { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7)) brightness(1.4); }
+  /* Plus/cross arrangement:
+        up
+     left  right
+        down
+  */
+  #nav-up { bottom: 142px; left: 50%; transform: translateX(-50%) rotate(180deg); }
+  #nav-down { bottom: 92px; left: 50%; transform: translateX(-50%) rotate(0deg); }
+  #nav-left { bottom: 117px; left: calc(50% - 40px); transform: translateX(-50%) rotate(90deg); }
+  #nav-right { bottom: 117px; left: calc(50% + 40px); transform: translateX(-50%) rotate(270deg); }
 
   #nav-hover {
     position: absolute; display: none; z-index: 55; pointer-events: none;
@@ -208,11 +215,12 @@
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; top: 40px; }
     #result { padding: 14px 16px; }
-    .nav-slot { width: 22px; bottom: 66px; }
-    #nav-left { left: calc(50% - 46px); }
-    #nav-down { left: calc(50% - 16px); }
-    #nav-up { left: calc(50% + 16px); }
-    #nav-right { left: calc(50% + 46px); }
+    .nav-slot { width: 22px; }
+    #nav-up { bottom: 108px; }
+    #nav-down { bottom: 68px; }
+    #nav-left, #nav-right { bottom: 88px; }
+    #nav-left { left: calc(50% - 30px); }
+    #nav-right { left: calc(50% + 30px); }
     #nav-hover { width: 54px; height: 54px; }
     #nav-hover img { width: 22px; }
   }
@@ -264,10 +272,10 @@
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
     <div id="mly"></div>
-    <img id="nav-up" class="nav-slot" style="transform:rotate(180deg)" src="assets/arrow.png" alt="" />
-    <img id="nav-down" class="nav-slot" style="transform:rotate(0deg)" src="assets/arrow.png" alt="" />
-    <img id="nav-left" class="nav-slot" style="transform:rotate(90deg)" src="assets/arrow.png" alt="" />
-    <img id="nav-right" class="nav-slot" style="transform:rotate(270deg)" src="assets/arrow.png" alt="" />
+    <img id="nav-up" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-down" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-left" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-right" class="nav-slot" src="assets/arrow.png" alt="" />
     <div id="nav-hover"><img src="assets/arrow.png" alt="" /></div>
   </div>
   <button id="guess-btn" class="btn">Guess</button>
@@ -607,6 +615,12 @@ let navEdges = []; // {direction, worldMotionAzimuth} edges for the CURRENT imag
 let navBearingDeg = 0; // current view bearing, degrees clockwise from north
 let navLastPoint = null; // last known {x,y} client coords while hovering, or null
 let navPointerDownAt = null;
+let navMovementEnabled = true; // false once results are showing for the round
+
+function tryMoveNavSlot(slotEl) {
+  if (!navMovementEnabled || !mlyViewer || slotEl.dataset.direction === undefined) return;
+  mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
+}
 
 function resetNavAvailability() {
   navEdges = [];
@@ -682,6 +696,7 @@ function hideNavHover() {
   document.getElementById('photo-panel').style.cursor = '';
 }
 function handleNavHoverAt(clientX, clientY) {
+  if (!navMovementEnabled) { hideNavHover(); return; }
   const panel = document.getElementById('photo-panel');
   const rect = panel.getBoundingClientRect();
   const zone = navHoverZoneFor(rect, clientX, clientY);
@@ -724,10 +739,16 @@ function refreshNavHover() {
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
     const rect = panel.getBoundingClientRect();
     const zone = navHoverZoneFor(rect, e.clientX, e.clientY);
-    const slotEl = document.getElementById('nav-' + zone);
-    if (slotEl.dataset.direction === undefined || !mlyViewer) return;
-    mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
+    tryMoveNavSlot(document.getElementById('nav-' + zone));
   });
+  // The plain always-visible arrows are directly clickable too, not just
+  // reachable by hovering anywhere in their quadrant of the photo.
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    document.getElementById('nav-' + slot).addEventListener('click', (e) => {
+      e.stopPropagation();
+      tryMoveNavSlot(document.getElementById('nav-' + slot));
+    });
+  }
 })();
 
 async function loadRound(tried = []) {
@@ -971,10 +992,19 @@ function resetMapMarkers() {
 function enterResultMapView() {
   document.getElementById('map-wrap').classList.add('result-view');
   if (map) map.invalidateSize();
+  // The round is already decided once results are showing — walking around
+  // further would be harmless (you can't guess again) but still shouldn't
+  // be possible, so disable and hide the nav arrows until the next round.
+  navMovementEnabled = false;
+  hideNavHover();
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    document.getElementById('nav-' + slot).style.display = 'none';
+  }
 }
 function exitResultMapView() {
   document.getElementById('map-wrap').classList.remove('result-view');
   if (map) map.invalidateSize();
+  navMovementEnabled = true;
 }
 
 function showMultiplayerResult(msg) {
