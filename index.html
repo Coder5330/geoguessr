@@ -265,7 +265,12 @@
   /* In-game Menu button — was easy to miss since it looked like the plain
      informational Round/Score pills. Given its own accent color (matching
      the "Play with friends" purple) so it visibly reads as a real control. */
-  #menu-wrap { position: relative; }
+  /* #hud is pointer-events:none so its informational pills don't block
+     Mapillary's own controls underneath — .hud-leave already opts back in
+     for the Leave button; #menu-wrap needs the same for the Menu button
+     AND its dropdown (music/account/leaderboard), or all of it is just
+     visually there but unclickable. */
+  #menu-wrap { position: relative; pointer-events: auto; }
   .hud-menu { color: #ddd6fe; background: rgba(139,92,246,0.28); border: 1px solid rgba(139,92,246,0.6); }
   .hud-menu:hover { background: rgba(139,92,246,0.4); }
   #menu-dropdown {
