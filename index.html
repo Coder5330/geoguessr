@@ -565,7 +565,9 @@ function mountViewer(imageId, { onImage } = {}) {
   });
   mlyViewer.on('sequenceedges', (event) => setNavSequenceEdges(event.status));
   mlyViewer.on('spatialedges', (event) => setNavSpatialEdges(event.status));
-  mlyViewer.on('bearing', (event) => { navBearingDeg = event.bearing; renderNavArrows(); });
+  // Re-project every time the view rotates, so arrows track the real road
+  // as you look around instead of a stale position from the last render.
+  mlyViewer.on('bearing', () => renderNavArrows());
 }
 
 // --- On-image navigation arrows (GeoGuessr-style, replacing Mapillary's own) ---
@@ -579,7 +581,6 @@ function mountViewer(imageId, { onImage } = {}) {
 
 let navSequenceEdges = [];
 let navSpatialEdges = [];
-let navBearingDeg = 0; // current view bearing, degrees clockwise from north
 let roundActive = true; // false once results are showing — blocks nav + guessing
 let navRenderSeq = 0; // guards against overlapping async renders
 
@@ -619,18 +620,6 @@ function navPriority(direction) {
   const idx = order.indexOf(direction);
   return idx === -1 ? order.length : idx;
 }
-// Clamp the segment center->target to the viewport (inset by margin). Returns
-// the target itself when it's already inside, otherwise the border crossing.
-function clampToViewport(cx, cy, tx, ty, W, H, margin) {
-  let dx = tx - cx, dy = ty - cy, t = 1;
-  if (dx > 0) t = Math.min(t, (W - margin - cx) / dx);
-  else if (dx < 0) t = Math.min(t, (margin - cx) / dx);
-  if (dy > 0) t = Math.min(t, (H - margin - cy) / dy);
-  else if (dy < 0) t = Math.min(t, (margin - cy) / dy);
-  t = Math.max(0, Math.min(1, t));
-  return [cx + dx * t, cy + dy * t];
-}
-
 function navArrowLayer() { return document.getElementById('nav-layer'); }
 
 async function renderNavArrows() {
@@ -641,7 +630,6 @@ async function renderNavArrows() {
 
   const canvas = mlyViewer.getCanvas();
   const W = canvas.clientWidth, H = canvas.clientHeight;
-  const cx = W / 2, cy = H / 2;
   const lat = currentCoords.lat, lon = currentCoords.lon;
 
   // Build candidate directions. Edges with a real bearing get projected;
@@ -664,29 +652,23 @@ async function renderNavArrows() {
     .sort((a, b) => navPriority(a.data.direction) - navPriority(b.data.direction))
     .slice(0, MAX_ARROWS);
 
+  // Real Street View / GeoGuessr convention: an arrow only appears once the
+  // road it leads to is actually in view — projected straight onto the road
+  // itself, nothing clamped to a screen edge. If a path is behind or beside
+  // you, you look around (drag) until it comes into frame, same as the real
+  // thing. That's simpler than edge-clamping and was the source of the
+  // overlapping-pile bug on dense panoramas.
   const items = [];
   for (const edge of candidates) {
     const brg = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
     const near = await mlyViewer.project(destLngLat(lat, lon, brg, 8));
     const far = await mlyViewer.project(destLngLat(lat, lon, brg, 40));
     if (seq !== navRenderSeq) return; // a newer render started; abort
+    if (!near) continue; // not currently in view — don't show anything for it
 
-    let x, y, rotation;
-    const target = near || far;
-    if (target) {
-      [x, y] = clampToViewport(cx, cy, target[0], target[1], W, H, 40);
-      if (near && far) {
-        rotation = 180 + Math.atan2(far[0] - near[0], -(far[1] - near[1])) * 180 / Math.PI;
-      } else {
-        const rel = ((brg - navBearingDeg + 180) % 360 + 360) % 360 - 180;
-        rotation = 180 + rel;
-      }
-    } else {
-      // Behind the camera (nothing projects): pin to bottom edge, pointing back.
-      const rel = ((brg - navBearingDeg + 180) % 360 + 360) % 360 - 180;
-      [x, y] = clampToViewport(cx, cy, cx + Math.sin(rel * Math.PI / 180) * 2000, cy - Math.cos(rel * Math.PI / 180) * 2000, W, H, 40);
-      rotation = 180 + rel;
-    }
+    const [x, y] = near;
+    if (x < 0 || x > W || y < 0 || y > H) continue; // projects behind the visible frame
+    const rotation = far ? 180 + Math.atan2(far[0] - x, -(far[1] - y)) * 180 / Math.PI : 180;
     items.push({ target: edge.target, x, y, rotation });
   }
 
