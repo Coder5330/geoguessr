@@ -128,28 +128,16 @@
     padding: 15px 46px; font-size: 16px; box-shadow: 0 6px 20px rgba(34,197,94,0.35);
   }
 
-  /* Our own always-visible movement controls, replacing Mapillary's built-in
-     on-image direction arrows (component: direction) which faded in/out
-     unpredictably as edge data loaded. Buttons stay on screen at all times;
-     only their enabled/disabled state changes as available directions for
-     the current image come in via the sequenceedges/spatialedges events. */
-  #nav-pad {
-    position: absolute; bottom: 20px; left: 20px; z-index: 600;
-    display: grid; grid-template-columns: 44px 44px 44px; grid-template-rows: 44px 44px;
-    gap: 6px;
+  /* Our own on-image movement cue, replacing Mapillary's built-in direction
+     arrows (which faded in/out unpredictably as edge data loaded). Hovering
+     over the photo is split into four zones (up/down/left/right of center);
+     this single arrow image is repositioned to the cursor and rotated to
+     match whichever zone you're over, but only shown when that direction is
+     actually available for the current image — see the nav-* JS below. */
+  #nav-arrow {
+    position: absolute; display: none; width: 56px; z-index: 50; pointer-events: none;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.8));
   }
-  .nav-btn {
-    width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--border);
-    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); color: var(--text);
-    font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-  .nav-btn:hover:not(:disabled) { background: rgba(34,197,94,0.25); border-color: var(--accent); }
-  .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-  #nav-forward { grid-column: 2; grid-row: 1; }
-  #nav-left { grid-column: 1; grid-row: 2; }
-  #nav-right { grid-column: 3; grid-row: 2; }
-  #nav-backward { grid-column: 2; grid-row: 2; }
 
   #result {
     position: fixed; left: 0; right: 0; bottom: 0; background: rgba(10,12,18,0.97);
@@ -197,8 +185,7 @@
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; top: 40px; }
     #result { padding: 14px 16px; }
-    #nav-pad { bottom: 66px; left: 10px; grid-template-columns: 36px 36px 36px; grid-template-rows: 36px 36px; gap: 4px; }
-    .nav-btn { width: 36px; height: 36px; font-size: 13px; }
+    #nav-arrow { width: 40px; }
   }
 </style>
 </head>
@@ -248,15 +235,10 @@
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
     <div id="mly"></div>
+    <img id="nav-arrow" src="assets/arrow.png" alt="" />
   </div>
   <button id="guess-btn" class="btn">Guess</button>
   <div id="map-wrap"><div id="map"></div></div>
-  <div id="nav-pad">
-    <button id="nav-forward" class="nav-btn" title="Forward" disabled>&#9650;</button>
-    <button id="nav-left" class="nav-btn" title="Turn left" disabled>&#9664;</button>
-    <button id="nav-right" class="nav-btn" title="Turn right" disabled>&#9654;</button>
-    <button id="nav-backward" class="nav-btn" title="Backward" disabled>&#9660;</button>
-  </div>
 </div>
 
 <div id="result">
@@ -555,7 +537,7 @@ function mountViewer(imageId, { onImage } = {}) {
     imageId: imageId,
     // Disable every bit of Mapillary's own UI chrome, including `direction`
     // (its on-image navigation arrows, which faded in/out unreliably as edge
-    // data loaded) — our own fixed #nav-pad below replaces it. Edge data
+    // data loaded) — the nav-arrow hover system below replaces it. Edge data
     // itself (sequenceedges/spatialedges) is unaffected by this and still
     // drives moveDir(), since that's core Navigator behavior, not tied to
     // whether the visual component is enabled. Keep `attribution` since
@@ -573,25 +555,26 @@ function mountViewer(imageId, { onImage } = {}) {
   mlyViewer.on('spatialedges', (event) => addNavDirections(event.status));
 }
 
-// --- Custom navigation pad (replaces Mapillary's flaky on-image arrows) ---
-// available directions for the CURRENT image only; reset on every new image.
-let navAvailable = new Set();
+// --- Custom on-image navigation (replaces Mapillary's flaky direction arrows) ---
+// Hovering the photo is split into four zones around its center (up/down/
+// left/right); nav-arrow follows the cursor and rotates to match whichever
+// zone it's in, but only appears when that direction is actually available
+// for the current image — so it only ever shows arrows you can really take,
+// right over the path they lead to, instead of fixed always-on corner buttons.
+
+let navAvailable = new Set(); // available directions for the CURRENT image only
+let navLastPoint = null; // last known {x,y} client coords while hovering, or null
+let navCurrentCandidates = null; // candidate directions for whatever zone is under navLastPoint
+let navPointerDownAt = null;
 
 function resetNavAvailability() {
   navAvailable = new Set();
-  updateNavButtons();
+  refreshNavHover();
 }
 function addNavDirections(status) {
   if (!status.cached) return;
   for (const edge of status.edges) navAvailable.add(edge.data.direction);
-  updateNavButtons();
-}
-function updateNavButtons() {
-  const D = mapillary.NavigationDirection;
-  document.getElementById('nav-forward').disabled = !(navAvailable.has(D.StepForward) || navAvailable.has(D.Next));
-  document.getElementById('nav-backward').disabled = !(navAvailable.has(D.StepBackward) || navAvailable.has(D.Prev));
-  document.getElementById('nav-left').disabled = !navAvailable.has(D.TurnLeft);
-  document.getElementById('nav-right').disabled = !navAvailable.has(D.TurnRight);
+  refreshNavHover();
 }
 function moveNav(...candidates) {
   if (!mlyViewer) return;
@@ -599,6 +582,73 @@ function moveNav(...candidates) {
   if (dir === undefined) return;
   mlyViewer.moveDir(dir).catch(() => {});
 }
+
+function navZones() {
+  const D = mapillary.NavigationDirection;
+  return {
+    up: { candidates: [D.StepForward, D.Next], rotate: 180 },
+    down: { candidates: [D.StepBackward, D.Prev], rotate: 0 },
+    left: { candidates: [D.TurnLeft], rotate: 90 },
+    right: { candidates: [D.TurnRight], rotate: 270 },
+  };
+}
+// Classic "X divides a rectangle into 4 triangles" hit test, using
+// normalized offsets so it works regardless of the container's aspect ratio.
+function navZoneFor(rect, clientX, clientY) {
+  const dx = (clientX - (rect.left + rect.width / 2)) / rect.width;
+  const dy = (clientY - (rect.top + rect.height / 2)) / rect.height;
+  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'up' : 'down';
+}
+function hideNavArrow() {
+  document.getElementById('nav-arrow').style.display = 'none';
+  document.getElementById('photo-panel').style.cursor = '';
+  navCurrentCandidates = null;
+}
+function handleNavHoverAt(clientX, clientY) {
+  const panel = document.getElementById('photo-panel');
+  const rect = panel.getBoundingClientRect();
+  const zone = navZones()[navZoneFor(rect, clientX, clientY)];
+  const dir = zone.candidates.find((d) => navAvailable.has(d));
+  if (dir === undefined) { hideNavArrow(); return; }
+  navCurrentCandidates = zone.candidates;
+  panel.style.cursor = 'pointer';
+  const arrow = document.getElementById('nav-arrow');
+  arrow.style.display = 'block';
+  arrow.style.left = (clientX - rect.left) + 'px';
+  arrow.style.top = (clientY - rect.top) + 'px';
+  arrow.style.transform = `translate(-50%, -50%) rotate(${zone.rotate}deg)`;
+}
+function refreshNavHover() {
+  if (navLastPoint) handleNavHoverAt(navLastPoint.x, navLastPoint.y);
+  else hideNavArrow();
+}
+
+(function initNavHoverListeners() {
+  const panel = document.getElementById('photo-panel');
+  panel.addEventListener('pointermove', (e) => {
+    navLastPoint = { x: e.clientX, y: e.clientY };
+    handleNavHoverAt(e.clientX, e.clientY);
+  });
+  panel.addEventListener('pointerleave', () => {
+    navLastPoint = null;
+    hideNavArrow();
+  });
+  panel.addEventListener('pointerdown', (e) => {
+    navPointerDownAt = { x: e.clientX, y: e.clientY };
+  });
+  panel.addEventListener('pointerup', (e) => {
+    const start = navPointerDownAt;
+    navPointerDownAt = null;
+    if (!start) return;
+    // Ignore drags (looking around) — only a near-stationary press counts as
+    // a click-to-move, same distinction Mapillary's own pointer component
+    // effectively makes between rotating the view and clicking a control.
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
+    handleNavHoverAt(e.clientX, e.clientY); // covers touch, which has no prior hover
+    if (navCurrentCandidates) moveNav(...navCurrentCandidates);
+  });
+})();
 
 async function loadRound(tried = []) {
   const status = document.getElementById("loading");
@@ -1165,18 +1215,6 @@ document.getElementById("guess-btn").addEventListener("click", () => {
 document.getElementById("leave-btn").addEventListener("click", leaveGame);
 document.getElementById("lobby-leave-btn").addEventListener("click", leaveGame);
 document.getElementById("result-leave-btn").addEventListener("click", leaveGame);
-document.getElementById("nav-forward").addEventListener("click", () => {
-  moveNav(mapillary.NavigationDirection.StepForward, mapillary.NavigationDirection.Next);
-});
-document.getElementById("nav-backward").addEventListener("click", () => {
-  moveNav(mapillary.NavigationDirection.StepBackward, mapillary.NavigationDirection.Prev);
-});
-document.getElementById("nav-left").addEventListener("click", () => {
-  moveNav(mapillary.NavigationDirection.TurnLeft);
-});
-document.getElementById("nav-right").addEventListener("click", () => {
-  moveNav(mapillary.NavigationDirection.TurnRight);
-});
 document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult

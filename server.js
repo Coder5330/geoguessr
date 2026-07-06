@@ -303,6 +303,29 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (pathname.startsWith('/assets/')) {
+    const assetsDir = path.join(__dirname, 'assets');
+    const resolved = path.resolve(path.join(assetsDir, pathname.slice('/assets/'.length)));
+    if (resolved !== assetsDir && !resolved.startsWith(assetsDir + path.sep)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+    fs.readFile(resolved, (err, data) => {
+      if (err) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+        return;
+      }
+      const contentType = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.svg': 'image/svg+xml', '.gif': 'image/gif', '.webp': 'image/webp',
+      }[path.extname(resolved).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    });
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('GuessWhere multiplayer server is running.');
 });
