@@ -255,10 +255,15 @@
   <div class="divider">or</div>
   <button class="btn btn-secondary" id="friends-btn">Play with friends</button>
 
+  <div id="name-prompt" style="display:none; flex-direction:column; gap:12px; align-items:center;">
+    <p style="color:var(--text-dim); font-size:14px; margin:0;">What should we call you?</p>
+    <input id="player-name-input" type="text" placeholder="Your name" maxlength="20" />
+    <button class="btn" id="save-name-btn">Continue</button>
+  </div>
+
   <div id="lobby">
     <div id="lobby-create">
-      <input id="name-input" type="text" placeholder="Your name" maxlength="20" />
-      <button class="btn" id="create-room-btn" style="margin-top:8px">Create room</button>
+      <button class="btn" id="create-room-btn">Create room</button>
     </div>
     <div class="divider">or</div>
     <div id="lobby-join">
@@ -340,6 +345,7 @@ const MAX_ROUNDS = 5;
 const SOLO_TIMEOUT_MS = 60000;
 const MP_SESSION_KEY = "gw_mp_session";
 const SOLO_SESSION_KEY = "gw_solo_session";
+const PLAYER_NAME_KEY = "gw_player_name";
 
 // --- Multiplayer state ---
 let ws = null;
@@ -1374,6 +1380,29 @@ function showLobby() {
   document.getElementById("friends-btn").style.display = "none";
 }
 
+// Ask for a name once, then remember it in localStorage — no more retyping
+// it every time you play with friends.
+let afterNamePrompt = showLobby;
+function getSavedName() {
+  return localStorage.getItem(PLAYER_NAME_KEY) || "";
+}
+function showNamePrompt(onDone) {
+  afterNamePrompt = onDone || showLobby;
+  document.getElementById("start-btn").style.display = "none";
+  document.getElementById("friends-btn").style.display = "none";
+  document.getElementById("name-prompt").style.display = "flex";
+  document.getElementById("player-name-input").focus();
+}
+function playWithFriends(onReady) {
+  const saved = getSavedName();
+  if (saved) {
+    myName = saved;
+    (onReady || showLobby)();
+  } else {
+    showNamePrompt(onReady);
+  }
+}
+
 function leaveGame() {
   if (!confirm("Leave the game?")) return;
   stopTimer();
@@ -1408,6 +1437,7 @@ function resetToStartScreen() {
   document.getElementById("result").style.display = "none";
 
   document.getElementById("lobby").style.display = "none";
+  document.getElementById("name-prompt").style.display = "none";
   document.getElementById("lobby-create").style.display = "block";
   document.getElementById("lobby-join").style.display = "block";
   document.getElementById("lobby-join").previousElementSibling.style.display = "block";
@@ -1418,33 +1448,16 @@ function resetToStartScreen() {
   document.getElementById("start-screen").style.display = "flex";
 }
 
-function requireName() {
-  const input = document.getElementById("name-input");
-  const name = input.value.trim();
-  if (!name) {
-    showToast("Enter your name first");
-    input.focus();
-    return null;
-  }
-  return name;
-}
-
 function createRoom() {
-  const name = requireName();
-  if (!name) return;
-  myName = name;
   isMultiplayer = true;
-  connectWS(() => ws.send(JSON.stringify({ type: "create_room", name })));
+  connectWS(() => ws.send(JSON.stringify({ type: "create_room", name: myName })));
 }
 
 function joinRoom(codeOverride) {
-  const name = requireName();
-  if (!name) return;
   const code = codeOverride || document.getElementById("join-code-input").value.trim().toUpperCase();
   if (!code) { showToast("Enter a room code"); return; }
-  myName = name;
   isMultiplayer = true;
-  connectWS(() => ws.send(JSON.stringify({ type: "join_room", name, code })));
+  connectWS(() => ws.send(JSON.stringify({ type: "join_room", name: myName, code })));
 }
 
 function attemptRejoin(session) {
@@ -1460,7 +1473,19 @@ function attemptRejoin(session) {
 }
 
 document.getElementById("start-btn").addEventListener("click", startGame);
-document.getElementById("friends-btn").addEventListener("click", showLobby);
+document.getElementById("friends-btn").addEventListener("click", () => playWithFriends());
+document.getElementById("save-name-btn").addEventListener("click", () => {
+  const input = document.getElementById("player-name-input");
+  const name = input.value.trim();
+  if (!name) { showToast("Enter your name first"); input.focus(); return; }
+  localStorage.setItem(PLAYER_NAME_KEY, name);
+  myName = name;
+  document.getElementById("name-prompt").style.display = "none";
+  afterNamePrompt();
+});
+document.getElementById("player-name-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("save-name-btn").click();
+});
 document.getElementById("create-room-btn").addEventListener("click", createRoom);
 document.getElementById("join-room-btn").addEventListener("click", () => joinRoom());
 document.getElementById("host-start-btn").addEventListener("click", () => {
@@ -1495,8 +1520,10 @@ document.getElementById("next-btn").addEventListener("click", () => {
   const params = new URLSearchParams(location.search);
   const roomCode = params.get("room");
   if (roomCode) {
-    showLobby();
-    document.getElementById("join-code-input").value = roomCode.toUpperCase();
+    playWithFriends(() => {
+      showLobby();
+      document.getElementById("join-code-input").value = roomCode.toUpperCase();
+    });
     return;
   }
   const mp = loadMPSession();
