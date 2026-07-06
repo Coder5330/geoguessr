@@ -262,22 +262,32 @@
   #toast.toast-error { border-color: var(--danger); }
   #toast.toast-error::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
 
-  #music-toggle {
-    position: fixed; top: 14px; left: 14px; z-index: 1500;
-    width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border);
-    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); color: var(--text);
-    font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  /* In-game Menu button — was easy to miss since it looked like the plain
+     informational Round/Score pills. Given its own accent color (matching
+     the "Play with friends" purple) so it visibly reads as a real control. */
+  #menu-wrap { position: relative; }
+  .hud-menu { color: #ddd6fe; background: rgba(139,92,246,0.28); border: 1px solid rgba(139,92,246,0.6); }
+  .hud-menu:hover { background: rgba(139,92,246,0.4); }
+  #menu-dropdown {
+    display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 550;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 6px; min-width: 170px;
   }
-  #music-toggle:hover { background: var(--panel-2); }
+  #menu-dropdown.open { display: block; }
+  .menu-dropdown-item {
+    display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  .menu-dropdown-item:hover { background: var(--panel-2); }
 </style>
 </head>
 <body>
 
 <div id="toast"></div>
 <audio id="bg-music" src="assets/music.mp3" loop preload="auto"></audio>
-<button id="music-toggle" title="Toggle music">🔊</button>
 
 <div id="start-screen">
+  <button id="start-music-toggle" class="btn-ghost" style="position:absolute; top:14px; right:14px;">🔊 Music</button>
   <img src="assets/logo.png" alt="" id="logo" />
   <h1>Geo<span>Guessr</span></h1>
   <p style="color:var(--text-dim); max-width:420px; font-size:14px">Walk around a real street using the arrows, then guess where you are on the map.</p>
@@ -323,7 +333,12 @@
     </div>
     <div id="timer" style="display:none">60</div>
     <div class="hud-group">
-      <button id="menu-btn" class="hud-pill">Menu ⋮</button>
+      <div id="menu-wrap">
+        <button id="menu-btn" class="hud-pill hud-menu">Menu ⋮</button>
+        <div id="menu-dropdown">
+          <button id="menu-music-toggle" class="menu-dropdown-item">🔊 Music: On</button>
+        </div>
+      </div>
       <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
     </div>
   </div>
@@ -371,21 +386,30 @@ function showToast(message, { error = false, duration = 2600 } = {}) {
 // playback is kicked off lazily on the first click anywhere.
 const MUSIC_MUTED_KEY = "gw_music_muted";
 let musicStarted = false;
+// Two separate toggle buttons — one on the start screen, one inside the
+// in-game Menu dropdown — since each is a child of a screen that's already
+// shown/hidden by the rest of the app, neither needs its own visibility
+// logic (and the old single floating button was the thing that used to
+// overlap the HUD during gameplay).
 function updateMusicButton() {
   const music = document.getElementById('bg-music');
-  document.getElementById('music-toggle').textContent = music.muted ? '🔇' : '🔊';
+  document.getElementById('start-music-toggle').textContent = music.muted ? '🔇 Music' : '🔊 Music';
+  document.getElementById('menu-music-toggle').textContent = music.muted ? '🔇 Music: Off' : '🔊 Music: On';
+}
+function toggleMusic() {
+  const music = document.getElementById('bg-music');
+  music.muted = !music.muted;
+  localStorage.setItem(MUSIC_MUTED_KEY, music.muted ? '1' : '0');
+  updateMusicButton();
+  if (!music.muted && !musicStarted) startMusicPlayback();
 }
 function initMusic() {
   const music = document.getElementById('bg-music');
   music.muted = localStorage.getItem(MUSIC_MUTED_KEY) === '1';
   music.volume = 0.4;
   updateMusicButton();
-  document.getElementById('music-toggle').addEventListener('click', () => {
-    music.muted = !music.muted;
-    localStorage.setItem(MUSIC_MUTED_KEY, music.muted ? '1' : '0');
-    updateMusicButton();
-    if (!music.muted && !musicStarted) startMusicPlayback();
-  });
+  document.getElementById('start-music-toggle').addEventListener('click', toggleMusic);
+  document.getElementById('menu-music-toggle').addEventListener('click', toggleMusic);
   document.addEventListener('click', () => { if (!musicStarted) startMusicPlayback(); }, { once: true });
 }
 function startMusicPlayback() {
@@ -1476,6 +1500,12 @@ function startGame(practice) {
   document.getElementById("start-screen").style.display = "none";
   document.getElementById("game").style.display = "block";
   document.getElementById("player-list").style.display = "none";
+  // If the previous game session ended on a result screen, roundActive and
+  // the photo panel's interactivity were left blocked (enterResultMapView
+  // sets them, and only nextRound()/the host "Continue" button undo it) —
+  // reset them here too so a freshly-started game isn't born stuck.
+  roundActive = true;
+  document.getElementById("photo-panel").style.pointerEvents = "";
   if (!map) initMap();
   loadRound();
 }
@@ -1485,6 +1515,8 @@ function resumeSoloSession(solo) {
   practiceMode = !!solo.practiceMode;
   round = solo.round || 1;
   totalScore = solo.totalScore || 0;
+  roundActive = true;
+  document.getElementById("photo-panel").style.pointerEvents = "";
   document.getElementById("start-screen").style.display = "none";
   document.getElementById("game").style.display = "block";
   document.getElementById("player-list").style.display = "none";
@@ -1552,6 +1584,8 @@ function resetToStartScreen() {
   latestPlayers = [];
   hasGuessedThisRound = false;
   round = 1; totalScore = 0;
+  roundActive = true;
+  document.getElementById("photo-panel").style.pointerEvents = "";
   document.getElementById("score").textContent = 0;
   document.getElementById("round").textContent = 1;
   currentImageId = null; currentCoords = null;
@@ -1643,6 +1677,14 @@ document.getElementById("guess-btn").addEventListener("click", () => {
 document.getElementById("leave-btn").addEventListener("click", leaveGame);
 document.getElementById("lobby-leave-btn").addEventListener("click", leaveGame);
 document.getElementById("result-leave-btn").addEventListener("click", leaveGame);
+document.getElementById("menu-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  document.getElementById("menu-dropdown").classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  const wrap = document.getElementById("menu-wrap");
+  if (!wrap.contains(e.target)) document.getElementById("menu-dropdown").classList.remove("open");
+});
 document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
