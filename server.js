@@ -203,8 +203,11 @@ function haversine(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
+// The actual GeoGuessr scoring formula: Score = 5000 * e^(-10*d / 14916862),
+// where d is the error distance in meters.
 function scoreFromDistance(km) {
-  return Math.round(5000 * Math.exp(-km / 2000));
+  const meters = km * 1000;
+  return Math.round(5000 * Math.exp(-10 * meters / 14916862));
 }
 
 // --- Room management ---
