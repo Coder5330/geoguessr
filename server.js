@@ -21,19 +21,54 @@ if (!TOKEN) {
   console.error('MAPILLARY_TOKEN environment variable is not set. Set it in Railway before deploying.');
 }
 
+// Spread across every inhabited continent so rounds don't keep clustering
+// around the North Atlantic. Antarctica is deliberately excluded: there's
+// essentially no street-level imagery there (no roads), so it would just
+// waste retries.
 const SPOTS = [
+  // North America
   { name: "New York", lat: 40.7580, lon: -73.9855 },
+  { name: "San Francisco", lat: 37.7897, lon: -122.4000 },
+  { name: "Toronto", lat: 43.6544, lon: -79.3807 },
+  { name: "Mexico City", lat: 19.4326, lon: -99.1332 },
+  { name: "Chicago", lat: 41.8781, lon: -87.6298 },
+  // South America
+  { name: "São Paulo", lat: -23.5505, lon: -46.6333 },
+  { name: "Buenos Aires", lat: -34.6037, lon: -58.3816 },
+  { name: "Santiago", lat: -33.4489, lon: -70.6693 },
+  { name: "Bogotá", lat: 4.7110, lon: -74.0721 },
+  { name: "Lima", lat: -12.0464, lon: -77.0428 },
+  // Europe
   { name: "London", lat: 51.5100, lon: -0.1340 },
   { name: "Paris", lat: 48.8698, lon: 2.3078 },
-  { name: "Tokyo", lat: 35.6595, lon: 139.7005 },
   { name: "Amsterdam", lat: 52.3731, lon: 4.8926 },
   { name: "Berlin", lat: 52.5163, lon: 13.3777 },
   { name: "Barcelona", lat: 41.3809, lon: 2.1730 },
-  { name: "San Francisco", lat: 37.7897, lon: -122.4000 },
-  { name: "Sydney", lat: -33.8568, lon: 151.2153 },
-  { name: "Toronto", lat: 43.6544, lon: -79.3807 },
   { name: "Madrid", lat: 40.4200, lon: -3.7025 },
   { name: "Rome", lat: 41.8902, lon: 12.4922 },
+  // Africa
+  { name: "Cape Town", lat: -33.9249, lon: 18.4241 },
+  { name: "Nairobi", lat: -1.2921, lon: 36.8219 },
+  { name: "Cairo", lat: 30.0444, lon: 31.2357 },
+  { name: "Lagos", lat: 6.5244, lon: 3.3792 },
+  { name: "Accra", lat: 5.6037, lon: -0.1870 },
+  // Asia
+  { name: "Tokyo", lat: 35.6595, lon: 139.7005 },
+  { name: "Seoul", lat: 37.5665, lon: 126.9780 },
+  { name: "Bangkok", lat: 13.7563, lon: 100.5018 },
+  { name: "Singapore", lat: 1.3521, lon: 103.8198 },
+  { name: "Taipei", lat: 25.0330, lon: 121.5654 },
+  { name: "Mumbai", lat: 19.0760, lon: 72.8777 },
+  { name: "Hong Kong", lat: 22.3193, lon: 114.1694 },
+  { name: "Manila", lat: 14.5995, lon: 120.9842 },
+  // Middle East
+  { name: "Dubai", lat: 25.2048, lon: 55.2708 },
+  { name: "Istanbul", lat: 41.0082, lon: 28.9784 },
+  { name: "Tel Aviv", lat: 32.0853, lon: 34.7818 },
+  // Oceania
+  { name: "Sydney", lat: -33.8568, lon: 151.2153 },
+  { name: "Melbourne", lat: -37.8136, lon: 144.9631 },
+  { name: "Auckland", lat: -36.8485, lon: 174.7633 },
 ];
 
 // --- BigInt-safe vector tile parsing (same approach proven out client-side) ---
