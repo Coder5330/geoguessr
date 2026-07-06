@@ -689,6 +689,9 @@ function saveSoloSession() {
     round, totalScore, imageId: currentImageId, practiceMode,
     lat: currentCoords ? currentCoords.lat : null,
     lon: currentCoords ? currentCoords.lon : null,
+    // Absolute deadline so a refresh resumes the real remaining time instead
+    // of granting a fresh 60s — no cheesing the clock by reloading.
+    timerEndAt: (timerInterval && !practiceMode) ? timerEndAt : null,
   }));
 }
 function clearSoloSession() { localStorage.removeItem(SOLO_SESSION_KEY); }
@@ -1733,7 +1736,13 @@ function resumeSoloSession(solo) {
   status.textContent = "Loading street view...";
   currentCoords = (solo.lat != null && solo.lon != null) ? { lat: solo.lat, lon: solo.lon } : null;
   mountViewer(solo.imageId, { onImage: () => { status.style.display = "none"; saveSoloSession(); } });
-  if (!practiceMode) startTimer(SOLO_TIMEOUT_MS);
+  if (!practiceMode) {
+    // Resume the clock from the real remaining time, not a fresh 60s. If it
+    // already ran out while the page was gone, the round is immediately over.
+    const remaining = solo.timerEndAt ? solo.timerEndAt - Date.now() : SOLO_TIMEOUT_MS;
+    if (remaining <= 0) submitGuess(true);
+    else startTimer(remaining);
+  }
 }
 
 function showLobby() {
