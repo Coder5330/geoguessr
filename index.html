@@ -129,21 +129,42 @@
     padding: 15px 46px; font-size: 16px; box-shadow: 0 6px 20px rgba(34,197,94,0.35);
   }
 
-  /* GeoGuessr-style movement arrows: each navigable road is drawn as a
-     circular arrow badge positioned (by JS, via viewer.project) at the spot
-     in the photo where that road actually leads, clamped to the screen edge
-     when the road is out of view. See the nav-* JS below. */
-  #nav-layer { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
-  .nav-arrow {
-    position: absolute; width: 64px; height: 64px; margin: -32px 0 0 -32px;
-    border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.25); border: 2px solid rgba(255,255,255,0.15);
-    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6)); cursor: pointer; pointer-events: auto;
-    transition: left 0.08s linear, top 0.08s linear;
+  /* Two-tier movement cue, replacing Mapillary's built-in direction arrows
+     (which faded in/out unpredictably as edge data loaded):
+     1. .nav-slot — plain arrows clustered in a plus/cross layout above the
+        Guess button, directly clickable, indicating which directions
+        currently exist.
+     2. #nav-hover — an additional interactive cue: a styled circular badge
+        that follows the cursor while hovering the photo and only appears
+        over a zone that has a navigable direction; clicking moves there.
+     Which real direction occupies each of the four zones (up/down/left/
+     right) is recomputed from that edge's real-world bearing relative to
+     your current view bearing, so it stays correct as you drag to look
+     around — see the nav-* JS below. */
+  .nav-slot {
+    position: absolute; display: none; z-index: 50; width: 28px; cursor: pointer;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
   }
-  .nav-arrow:hover { background: rgba(255,255,255,0.4); }
-  .nav-arrow img {
-    width: 28px; pointer-events: none;
+  .nav-slot:hover { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7)) brightness(1.4); }
+  /* Plus/cross arrangement:
+        up
+     left  right
+        down
+  */
+  #nav-up { bottom: 142px; left: 50%; transform: translateX(-50%) rotate(180deg); }
+  #nav-down { bottom: 92px; left: 50%; transform: translateX(-50%) rotate(0deg); }
+  #nav-left { bottom: 117px; left: calc(50% - 40px); transform: translateX(-50%) rotate(90deg); }
+  #nav-right { bottom: 117px; left: calc(50% + 40px); transform: translateX(-50%) rotate(270deg); }
+
+  #nav-hover {
+    position: absolute; display: none; z-index: 55; pointer-events: none;
+    width: 72px; height: 72px; border-radius: 50%;
+    align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.25); border: 2px solid rgba(255,255,255,0.15);
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+  }
+  #nav-hover img {
+    width: 30px;
     /* arrow.png is solid white on transparent — brightness() scales the RGB
        channels down to a dark grey without touching the alpha/transparency. */
     filter: brightness(0.35);
@@ -195,8 +216,14 @@
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; top: 40px; }
     #result { padding: 14px 16px; }
-    .nav-arrow { width: 52px; height: 52px; margin: -26px 0 0 -26px; }
-    .nav-arrow img { width: 22px; }
+    .nav-slot { width: 22px; }
+    #nav-up { bottom: 108px; }
+    #nav-down { bottom: 68px; }
+    #nav-left, #nav-right { bottom: 88px; }
+    #nav-left { left: calc(50% - 30px); }
+    #nav-right { left: calc(50% + 30px); }
+    #nav-hover { width: 54px; height: 54px; }
+    #nav-hover img { width: 22px; }
   }
 </style>
 </head>
@@ -247,7 +274,11 @@
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
     <div id="mly"></div>
-    <div id="nav-layer"></div>
+    <img id="nav-up" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-down" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-left" class="nav-slot" src="assets/arrow.png" alt="" />
+    <img id="nav-right" class="nav-slot" src="assets/arrow.png" alt="" />
+    <div id="nav-hover"><img src="assets/arrow.png" alt="" /></div>
   </div>
   <button id="guess-btn" class="btn">Guess</button>
   <div id="map-wrap"><div id="map"></div></div>
@@ -565,135 +596,204 @@ function mountViewer(imageId, { onImage } = {}) {
   });
   mlyViewer.on('sequenceedges', (event) => setNavSequenceEdges(event.status));
   mlyViewer.on('spatialedges', (event) => setNavSpatialEdges(event.status));
-  // Re-project every time the view rotates, so arrows track the real road
-  // as you look around instead of a stale position from the last render.
-  mlyViewer.on('bearing', () => renderNavArrows());
+  mlyViewer.on('bearing', (event) => { navBearingDeg = event.bearing; updateNavSlots(); });
 }
 
-// --- On-image navigation arrows (GeoGuessr-style, replacing Mapillary's own) ---
-// Each navigable edge is drawn as a circular arrow badge positioned at the
-// point in the photo where that road actually leads (via viewer.project of a
-// point offset along the edge's real-world bearing). When a road is in view
-// the badge sits ON it; when it's outside the current field of view the badge
-// clamps to the screen edge in the road's direction so it never just vanishes.
-// Clicking a badge moves along that edge. Everything is recomputed as you look
-// around (bearing event) so it always tracks the real geometry.
+// --- Custom on-image navigation (replaces Mapillary's flaky direction arrows) ---
+// Two tiers:
+// 1. The four .nav-slot images are plain, always-visible, non-interactive —
+//    they just show which directions currently exist, clustered at bottom-
+//    center. Which real edge occupies each zone (up/down/left/right) is
+//    recomputed from that edge's real-world bearing (worldMotionAzimuth)
+//    relative to your current view bearing, so — unlike a fixed "up =
+//    forward" mapping — it stays correct as you drag to look around, the
+//    same way Mapillary's own arrows track edges, just without Mapillary's
+//    own flaky rendering.
+// 2. #nav-hover is the actual interactive control: it follows the cursor
+//    while hovering the photo, appears only over a zone that currently has
+//    a direction, and clicking (not dragging) moves you there.
 
+// Sequence and spatial edges are reported by separate events, each of which
+// can refire more than once as caching completes — tracked separately and
+// replaced (not appended) so a repeat firing can't pile up stale duplicates.
 let navSequenceEdges = [];
 let navSpatialEdges = [];
-let roundActive = true; // false once results are showing — blocks nav + guessing
-let navRenderSeq = 0; // guards against overlapping async renders
+let navBearingDeg = 0; // current view bearing, degrees clockwise from north
+let navLastPoint = null; // last known {x,y} client coords while hovering, or null
+let navPointerDownAt = null;
+let roundActive = true; // false once results are showing — blocks both nav movement and placing/moving the guess pin
+
+function tryMoveNavSlot(slotEl) {
+  if (!roundActive || !mlyViewer || slotEl.dataset.direction === undefined) return;
+  mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
+}
 
 function resetNavAvailability() {
   navSequenceEdges = [];
   navSpatialEdges = [];
-  renderNavArrows();
+  updateNavSlots();
 }
 function setNavSequenceEdges(status) {
   if (!status.cached) return;
   navSequenceEdges = status.edges;
-  renderNavArrows();
+  updateNavSlots();
 }
 function setNavSpatialEdges(status) {
   if (!status.cached) return;
   navSpatialEdges = status.edges;
-  renderNavArrows();
+  updateNavSlots();
 }
 
+// Prefer actual spatial steps/turns over sequence Next/Prev (which carry no
+// real bearing) or the more exotic spherical/similar edge types.
+function navPriority(direction) {
+  const D = mapillary.NavigationDirection;
+  const order = [D.StepForward, D.StepBackward, D.StepLeft, D.StepRight, D.TurnLeft, D.TurnRight, D.Next, D.Prev, D.Spherical, D.Similar];
+  const idx = order.indexOf(direction);
+  return idx === -1 ? order.length : idx;
+}
+// Same conversion Mapillary's own internal Spatial utility uses to turn a raw
+// azimuthal angle (radians) into a compass bearing (degrees clockwise from north).
 function azimuthToBearingDeg(azimuthRad) {
   const deg = (-azimuthRad + Math.PI / 2) * 180 / Math.PI;
   return ((deg % 360) + 360) % 360;
 }
-function destLngLat(lat, lon, brgDeg, distM) {
-  const R = 6378137, d = distM / R, t = brgDeg * Math.PI / 180;
-  const p1 = lat * Math.PI / 180, l1 = lon * Math.PI / 180;
-  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(t));
-  const l2 = l1 + Math.atan2(Math.sin(t) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
-  return { lat: p2 * 180 / Math.PI, lng: l2 * 180 / Math.PI };
-}
-// Prefer real spatial steps/turns/spherical (they carry a true bearing) over
-// sequence Next/Prev (which don't). Lower = higher priority when de-duping
-// two edges that resolve to nearly the same on-screen direction.
-function navPriority(direction) {
+function navSlotForEdge(edge) {
   const D = mapillary.NavigationDirection;
-  const order = [D.StepForward, D.StepBackward, D.StepLeft, D.StepRight, D.TurnLeft, D.TurnRight, D.Spherical, D.Similar, D.Next, D.Prev];
-  const idx = order.indexOf(direction);
-  return idx === -1 ? order.length : idx;
+  let relative;
+  if (Number.isNaN(edge.data.worldMotionAzimuth)) {
+    // Sequence Next/Prev carry no real bearing — approximate them as
+    // straight ahead/behind wherever you're currently facing.
+    relative = edge.data.direction === D.Prev ? 180 : 0;
+  } else {
+    const edgeBearing = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
+    relative = ((edgeBearing - navBearingDeg + 180) % 360 + 360) % 360 - 180; // (-180, 180]
+  }
+  const abs = Math.abs(relative);
+  if (abs <= 45) return 'up';
+  if (abs >= 135) return 'down';
+  return relative > 0 ? 'right' : 'left';
 }
-function navArrowLayer() { return document.getElementById('nav-layer'); }
-
-async function renderNavArrows() {
-  const seq = ++navRenderSeq;
-  const layer = navArrowLayer();
-  if (!layer) return;
-  if (!roundActive || !mlyViewer || !currentCoords) { layer.innerHTML = ''; return; }
-
-  const canvas = mlyViewer.getCanvas();
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  const lat = currentCoords.lat, lon = currentCoords.lon;
-
-  // Build candidate directions. Edges with a real bearing get projected;
-  // dedupe by ~45deg bearing bucket keeping the highest-priority direction —
-  // spherical (360deg panorama) images can have many nearby connections
-  // clustered within a few degrees of each other, which used to spawn a
-  // separate overlapping arrow for each one.
-  const byBucket = new Map();
-  for (const edge of [...navSpatialEdges, ...navSequenceEdges]) {
-    const az = edge.data.worldMotionAzimuth;
-    if (!isFinite(az)) continue;
-    const brg = azimuthToBearingDeg(az);
-    const key = Math.round(brg / 45);
-    const cur = byBucket.get(key);
-    if (!cur || navPriority(edge.data.direction) < navPriority(cur.data.direction)) byBucket.set(key, edge);
+function updateNavSlots() {
+  const best = { up: null, down: null, left: null, right: null };
+  for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
+    const slot = navSlotForEdge(edge);
+    if (!best[slot] || navPriority(edge.data.direction) < navPriority(best[slot].data.direction)) {
+      best[slot] = edge;
+    }
   }
-  // Hard cap on top of the bucketing — never show a wall of arrows.
-  const MAX_ARROWS = 4;
-  const candidates = [...byBucket.values()]
-    .sort((a, b) => navPriority(a.data.direction) - navPriority(b.data.direction))
-    .slice(0, MAX_ARROWS);
-
-  // Real Street View / GeoGuessr convention: an arrow only appears once the
-  // road it leads to is actually in view — projected straight onto the road
-  // itself, nothing clamped to a screen edge. If a path is behind or beside
-  // you, you look around (drag) until it comes into frame, same as the real
-  // thing. That's simpler than edge-clamping and was the source of the
-  // overlapping-pile bug on dense panoramas.
-  const items = [];
-  for (const edge of candidates) {
-    const brg = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
-    const near = await mlyViewer.project(destLngLat(lat, lon, brg, 8));
-    const far = await mlyViewer.project(destLngLat(lat, lon, brg, 40));
-    if (seq !== navRenderSeq) return; // a newer render started; abort
-    if (!near) continue; // not currently in view — don't show anything for it
-
-    const [x, y] = near;
-    if (x < 0 || x > W || y < 0 || y > H) continue; // projects behind the visible frame
-    const rotation = far ? 180 + Math.atan2(far[0] - x, -(far[1] - y)) * 180 / Math.PI : 180;
-    items.push({ target: edge.target, x, y, rotation });
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    const el = document.getElementById('nav-' + slot);
+    if (best[slot]) {
+      el.style.display = 'block';
+      el.dataset.direction = String(best[slot].data.direction);
+    } else {
+      el.style.display = 'none';
+      delete el.dataset.direction;
+    }
   }
+  refreshNavHover(); // if already hovering, reflect any change immediately
+}
 
-  if (seq !== navRenderSeq) return;
-  layer.innerHTML = '';
-  for (const it of items) {
-    const badge = document.createElement('div');
-    badge.className = 'nav-arrow';
-    badge.style.left = it.x + 'px';
-    badge.style.top = it.y + 'px';
-    const img = document.createElement('img');
-    img.src = 'assets/arrow.png';
-    img.alt = '';
-    img.style.transform = `rotate(${it.rotation}deg)`;
-    badge.appendChild(img);
-    badge.addEventListener('click', (e) => {
+// Classic "X divides a rectangle into 4 triangles" hit test, using
+// normalized offsets so it works regardless of the container's aspect ratio.
+function navHoverZoneFor(rect, clientX, clientY) {
+  const dx = (clientX - (rect.left + rect.width / 2)) / rect.width;
+  const dy = (clientY - (rect.top + rect.height / 2)) / rect.height;
+  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'up' : 'down';
+}
+function hideNavHover() {
+  document.getElementById('nav-hover').style.display = 'none';
+  document.getElementById('photo-panel').style.cursor = '';
+}
+// The panel-wide quadrant test is based on distance from the WHOLE photo's
+// center — but the .nav-slot cluster sits low, near the bottom edge, so a
+// click physically ON one of those arrows still geometrically falls in the
+// "down" quadrant of the full panel. Without this check, every arrow click
+// fired a second, usually-wrong moveDir alongside the correct direct one
+// (that's the "clicking one arrow breaks the others" bug) — so any
+// interaction that targets the cluster (or the hover badge) is left
+// entirely to their own dedicated handlers instead.
+function isNavClusterTarget(target) {
+  return !!(target && target.closest && target.closest('.nav-slot, #nav-hover'));
+}
+// A padded bounding box around whichever arrows are currently visible, so
+// "near" means the general cluster area rather than requiring the cursor to
+// land on one specific 28px icon.
+function nearNavCluster(clientX, clientY) {
+  const pad = 24;
+  let minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity, any = false;
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    const el = document.getElementById('nav-' + slot);
+    if (el.style.display === 'none') continue;
+    const r = el.getBoundingClientRect();
+    minLeft = Math.min(minLeft, r.left); minTop = Math.min(minTop, r.top);
+    maxRight = Math.max(maxRight, r.right); maxBottom = Math.max(maxBottom, r.bottom);
+    any = true;
+  }
+  if (!any) return false;
+  return clientX >= minLeft - pad && clientX <= maxRight + pad && clientY >= minTop - pad && clientY <= maxBottom + pad;
+}
+function handleNavHoverAt(clientX, clientY) {
+  if (!roundActive) { hideNavHover(); return; }
+  // Don't show the hover badge near the always-visible arrows — they're
+  // already directly clickable, so a second control right on top is just clutter.
+  if (nearNavCluster(clientX, clientY)) { hideNavHover(); return; }
+  const panel = document.getElementById('photo-panel');
+  const rect = panel.getBoundingClientRect();
+  const zone = navHoverZoneFor(rect, clientX, clientY);
+  const slotEl = document.getElementById('nav-' + zone);
+  if (slotEl.dataset.direction === undefined) { hideNavHover(); return; }
+  panel.style.cursor = 'pointer';
+  const hover = document.getElementById('nav-hover');
+  hover.style.display = 'flex';
+  hover.style.left = (clientX - rect.left) + 'px';
+  hover.style.top = (clientY - rect.top) + 'px';
+  hover.style.transform = 'translate(-50%, -50%)';
+  const rotate = { up: 180, down: 0, left: 90, right: 270 }[zone];
+  hover.querySelector('img').style.transform = `rotate(${rotate}deg)`;
+}
+function refreshNavHover() {
+  if (navLastPoint) handleNavHoverAt(navLastPoint.x, navLastPoint.y);
+  else hideNavHover();
+}
+
+(function initNavHoverListeners() {
+  const panel = document.getElementById('photo-panel');
+  panel.addEventListener('pointermove', (e) => {
+    navLastPoint = { x: e.clientX, y: e.clientY };
+    handleNavHoverAt(e.clientX, e.clientY);
+  });
+  panel.addEventListener('pointerleave', () => {
+    navLastPoint = null;
+    hideNavHover();
+  });
+  panel.addEventListener('pointerdown', (e) => {
+    if (isNavClusterTarget(e.target)) { navPointerDownAt = null; return; }
+    navPointerDownAt = { x: e.clientX, y: e.clientY };
+  });
+  panel.addEventListener('pointerup', (e) => {
+    const start = navPointerDownAt;
+    navPointerDownAt = null;
+    if (!start || isNavClusterTarget(e.target)) return;
+    // Ignore drags (looking around) — only a near-stationary press counts as
+    // a click-to-move, same distinction Mapillary's own pointer component
+    // effectively makes between rotating the view and clicking a control.
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
+    const rect = panel.getBoundingClientRect();
+    const zone = navHoverZoneFor(rect, e.clientX, e.clientY);
+    tryMoveNavSlot(document.getElementById('nav-' + zone));
+  });
+  // The plain always-visible arrows are directly clickable too, not just
+  // reachable by hovering anywhere in their quadrant of the photo.
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    document.getElementById('nav-' + slot).addEventListener('click', (e) => {
       e.stopPropagation();
-      // moveTo(targetImageId) navigates to the specific connected image —
-      // reliable across all edge types. moveDir(Spherical) in particular is a
-      // no-op for panoramas, which was the real "clicking doesn't move" bug.
-      if (roundActive && mlyViewer && it.target) mlyViewer.moveTo(it.target).catch(() => {});
+      tryMoveNavSlot(document.getElementById('nav-' + slot));
     });
-    layer.appendChild(badge);
   }
-}
+})();
 
 async function loadRound(tried = []) {
   const status = document.getElementById("loading");
@@ -719,31 +819,11 @@ async function loadRound(tried = []) {
     if (!start) return loadRound([...tried, ...batch.map(s => s.name)]);
 
     currentCoords = { lat: start.lat, lon: start.lon };
-
-    // If the viewer never fires its image event (Mapillary busy/rate-limited),
-    // don't hang on "Loading..." forever — surface a retry after a timeout.
-    let loaded = false;
-    const loadTimeout = setTimeout(() => {
-      if (loaded) return;
-      status.innerHTML = "Street view is taking too long to load — Mapillary may be busy.<br><br>" +
-        "<button class='btn' id='retry-btn'>Try again</button>";
-      const rb = document.getElementById("retry-btn");
-      if (rb) rb.onclick = () => loadRound();
-    }, 15000);
-
     mountViewer(start.id, {
-      onImage: () => {
-        if (loaded) return;
-        loaded = true;
-        clearTimeout(loadTimeout);
-        status.style.display = "none";
-        // Start the guess clock only once the image is actually visible, not
-        // while it's still loading (otherwise slow loads eat into your time).
-        startTimer(SOLO_TIMEOUT_MS);
-        saveSoloSession();
-      }
+      onImage: () => { status.style.display = "none"; saveSoloSession(); }
     });
     saveSoloSession();
+    startTimer(SOLO_TIMEOUT_MS);
   } catch (err) {
     status.textContent = "Error: " + err.message;
   }
@@ -962,7 +1042,10 @@ function enterResultMapView() {
   // block all interaction with the photo (including Mapillary's own
   // drag-to-look-around) until the next round.
   roundActive = false;
-  renderNavArrows(); // clears the layer while roundActive is false
+  hideNavHover();
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    document.getElementById('nav-' + slot).style.display = 'none';
+  }
   document.getElementById('photo-panel').style.pointerEvents = 'none';
 }
 function exitResultMapView() {
