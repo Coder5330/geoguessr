@@ -645,19 +645,27 @@ async function renderNavArrows() {
   const lat = currentCoords.lat, lon = currentCoords.lon;
 
   // Build candidate directions. Edges with a real bearing get projected;
-  // dedupe by ~15deg bearing bucket keeping the highest-priority direction.
+  // dedupe by ~45deg bearing bucket keeping the highest-priority direction —
+  // spherical (360deg panorama) images can have many nearby connections
+  // clustered within a few degrees of each other, which used to spawn a
+  // separate overlapping arrow for each one.
   const byBucket = new Map();
   for (const edge of [...navSpatialEdges, ...navSequenceEdges]) {
     const az = edge.data.worldMotionAzimuth;
     if (!isFinite(az)) continue;
     const brg = azimuthToBearingDeg(az);
-    const key = Math.round(brg / 15);
+    const key = Math.round(brg / 45);
     const cur = byBucket.get(key);
     if (!cur || navPriority(edge.data.direction) < navPriority(cur.data.direction)) byBucket.set(key, edge);
   }
+  // Hard cap on top of the bucketing — never show a wall of arrows.
+  const MAX_ARROWS = 4;
+  const candidates = [...byBucket.values()]
+    .sort((a, b) => navPriority(a.data.direction) - navPriority(b.data.direction))
+    .slice(0, MAX_ARROWS);
 
   const items = [];
-  for (const edge of byBucket.values()) {
+  for (const edge of candidates) {
     const brg = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
     const near = await mlyViewer.project(destLngLat(lat, lon, brg, 8));
     const far = await mlyViewer.project(destLngLat(lat, lon, brg, 40));
