@@ -623,9 +623,18 @@ let navLastPoint = null; // last known {x,y} client coords while hovering, or nu
 let navPointerDownAt = null;
 let roundActive = true; // false once results are showing — blocks both nav movement and placing/moving the guess pin
 
-function tryMoveNavSlot(slotEl) {
-  if (!roundActive || !mlyViewer || slotEl.dataset.direction === undefined) return;
-  mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
+async function tryMoveNavSlot(slot) {
+  if (!roundActive || !mlyViewer) return;
+  // Don't trust the cached navBearingDeg here — it only updates when the
+  // 'bearing' event fires, which can lag behind an active drag. Fetch the
+  // viewer's actual live bearing right now and recompute which edge belongs
+  // in this slot at THIS exact moment, so the move always matches whatever
+  // you were just looking at when you clicked, not a stale snapshot.
+  let bearingDeg = navBearingDeg;
+  try { bearingDeg = await mlyViewer.getBearing(); } catch {}
+  const edge = bestEdgeForSlot(slot, bearingDeg);
+  if (!edge) return;
+  mlyViewer.moveDir(edge.data.direction).catch(() => {});
 }
 
 function resetNavAvailability() {
@@ -660,7 +669,7 @@ function azimuthToBearingDeg(azimuthRad) {
 }
 // Relative angle of an edge vs. your current view: 0 = straight ahead,
 // +90 = directly to your right, -90 = directly to your left, +-180 = behind.
-function navRelativeAngleForEdge(edge) {
+function navRelativeAngleForEdge(edge, bearingDeg) {
   const D = mapillary.NavigationDirection;
   if (Number.isNaN(edge.data.worldMotionAzimuth)) {
     // Sequence Next/Prev carry no real bearing — approximate them as
@@ -668,7 +677,20 @@ function navRelativeAngleForEdge(edge) {
     return edge.data.direction === D.Prev ? 180 : 0;
   }
   const edgeBearing = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
-  return ((edgeBearing - navBearingDeg + 180) % 360 + 360) % 360 - 180; // (-180, 180]
+  return ((edgeBearing - bearingDeg + 180) % 360 + 360) % 360 - 180; // (-180, 180]
+}
+// Which edge WOULD occupy this slot at a given bearing — used both for the
+// (possibly slightly-stale, event-driven) display, and, critically,
+// recomputed fresh against the viewer's live bearing right when a click
+// actually executes a move, so a move can never use an out-of-date rotation
+// snapshot from a lagging 'bearing' event.
+function bestEdgeForSlot(slot, bearingDeg) {
+  let best = null;
+  for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
+    if (navSlotForAngle(navRelativeAngleForEdge(edge, bearingDeg)) !== slot) continue;
+    if (!best || navPriority(edge.data.direction) < navPriority(best.data.direction)) best = edge;
+  }
+  return best;
 }
 function navSlotForAngle(relative) {
   const abs = Math.abs(relative);
@@ -690,7 +712,7 @@ function updateNavSlots() {
   const best = { up: null, down: null, left: null, right: null };
   const bestAngle = { up: null, down: null, left: null, right: null };
   for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
-    const relative = navRelativeAngleForEdge(edge);
+    const relative = navRelativeAngleForEdge(edge, navBearingDeg);
     const slot = navSlotForAngle(relative);
     if (!best[slot] || navPriority(edge.data.direction) < navPriority(best[slot].data.direction)) {
       best[slot] = edge;
@@ -819,14 +841,14 @@ function refreshNavHover() {
     // effectively makes between rotating the view and clicking a control.
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
     const zone = navClosestSlotFor(e.clientX, e.clientY);
-    if (zone) tryMoveNavSlot(document.getElementById('nav-' + zone));
+    if (zone) tryMoveNavSlot(zone);
   });
   // The plain always-visible arrows are directly clickable too, not just
   // reachable by hovering anywhere in their quadrant of the photo.
   for (const slot of ['up', 'down', 'left', 'right']) {
     document.getElementById('nav-' + slot).addEventListener('click', (e) => {
       e.stopPropagation();
-      tryMoveNavSlot(document.getElementById('nav-' + slot));
+      tryMoveNavSlot(slot);
     });
   }
 })();
