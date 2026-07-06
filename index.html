@@ -196,7 +196,11 @@
   }
   #result h2 { margin: 0; font-size: 30px; }
   #result p { margin: 0; color: var(--text-dim); }
-  #result-comment { font-style: italic; font-size: 13px; color: var(--accent); opacity: 0.9; }
+  #result-comment {
+    font-style: italic; font-size: 13px; color: var(--text);
+    background: rgba(255,255,255,0.06); border-radius: 999px; padding: 6px 16px;
+  }
+  #result-comment:empty { display: none; }
   #results-table { width: 100%; max-width: 360px; text-align: left; font-size: 14px; border-collapse: collapse; margin-top: 6px; }
   #results-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   #results-table tr:first-child td { color: var(--accent); font-weight: 700; }
@@ -257,11 +261,21 @@
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.toast-error { border-color: var(--danger); }
   #toast.toast-error::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
+
+  #music-toggle {
+    position: fixed; top: 14px; left: 14px; z-index: 1500;
+    width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border);
+    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); color: var(--text);
+    font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  #music-toggle:hover { background: var(--panel-2); }
 </style>
 </head>
 <body>
 
 <div id="toast"></div>
+<audio id="bg-music" src="assets/music.mp3" loop preload="auto"></audio>
+<button id="music-toggle" title="Toggle music">🔊</button>
 
 <div id="start-screen">
   <img src="assets/logo.png" alt="" id="logo" />
@@ -270,6 +284,7 @@
   <button class="btn" id="start-btn">Play solo</button>
   <div class="divider" id="start-divider">or</div>
   <button class="btn btn-secondary" id="friends-btn">Play with friends</button>
+  <button class="btn-ghost" id="practice-btn" style="margin-top:2px;">Practice mode (no timer)</button>
 
   <div id="name-prompt" style="display:none; flex-direction:column; gap:12px; align-items:center;">
     <p style="color:var(--text-dim); font-size:14px; margin:0;">What should we call you?</p>
@@ -307,7 +322,10 @@
       <div class="hud-pill">Score <span id="score">0</span></div>
     </div>
     <div id="timer" style="display:none">60</div>
-    <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
+    <div class="hud-group">
+      <button id="menu-btn" class="hud-pill">Menu ⋮</button>
+      <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
+    </div>
   </div>
   <div id="player-list" style="display:none"></div>
   <div id="photo-panel">
@@ -330,6 +348,7 @@
     <p id="result-comment"></p>
     <table id="results-table" style="display:none"></table>
     <button class="btn" id="next-btn">Next round</button>
+    <button class="btn-ghost" id="signup-btn">👤 Sign up to save your score!</button>
     <button class="btn-ghost" id="result-leave-btn">Leave</button>
   </div>
 </div>
@@ -345,6 +364,34 @@ function showToast(message, { error = false, duration = 2600 } = {}) {
   el.classList.add('show');
   clearTimeout(toastHideTimer);
   toastHideTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// Background music — muted state remembered across sessions. Browsers block
+// audio autoplay until the user actually interacts with the page, so actual
+// playback is kicked off lazily on the first click anywhere.
+const MUSIC_MUTED_KEY = "gw_music_muted";
+let musicStarted = false;
+function updateMusicButton() {
+  const music = document.getElementById('bg-music');
+  document.getElementById('music-toggle').textContent = music.muted ? '🔇' : '🔊';
+}
+function initMusic() {
+  const music = document.getElementById('bg-music');
+  music.muted = localStorage.getItem(MUSIC_MUTED_KEY) === '1';
+  music.volume = 0.4;
+  updateMusicButton();
+  document.getElementById('music-toggle').addEventListener('click', () => {
+    music.muted = !music.muted;
+    localStorage.setItem(MUSIC_MUTED_KEY, music.muted ? '1' : '0');
+    updateMusicButton();
+    if (!music.muted && !musicStarted) startMusicPlayback();
+  });
+  document.addEventListener('click', () => { if (!musicStarted) startMusicPlayback(); }, { once: true });
+}
+function startMusicPlayback() {
+  musicStarted = true;
+  const music = document.getElementById('bg-music');
+  music.play().catch(() => {}); // ignore autoplay rejection — user can use the toggle
 }
 
 let TOKEN = "__MAPILLARY_TOKEN__"; // injected by server.js from the MAPILLARY_TOKEN env var at request time
@@ -372,6 +419,7 @@ let myName = "Player";
 let currentRoomCode = null;
 let hostId = null;
 let isMultiplayer = false;
+let practiceMode = false; // solo only — skips the round timer entirely
 let hasGuessedThisRound = false;
 let latestPlayers = [];
 
@@ -428,7 +476,7 @@ function loadMPSession() {
 function saveSoloSession() {
   if (isMultiplayer || !currentImageId) return;
   localStorage.setItem(SOLO_SESSION_KEY, JSON.stringify({
-    round, totalScore, imageId: currentImageId,
+    round, totalScore, imageId: currentImageId, practiceMode,
     lat: currentCoords ? currentCoords.lat : null,
     lon: currentCoords ? currentCoords.lon : null,
   }));
@@ -950,7 +998,8 @@ async function loadRound(tried = []) {
         status.style.display = "none";
         // Start the guess clock only once the image is actually visible, not
         // while it's still loading (otherwise slow loads eat into your time).
-        startTimer(SOLO_TIMEOUT_MS);
+        // Practice mode skips this entirely — no pressure, take your time.
+        if (!practiceMode) startTimer(SOLO_TIMEOUT_MS);
         saveSoloSession();
       }
     });
@@ -1207,7 +1256,7 @@ function exitResultMapView() {
 function showMultiplayerResult(msg) {
   const me = msg.results.find(r => r.id === myId);
   document.getElementById("result-title").textContent = me && me.dist != null
-    ? `${Math.round(me.dist)} km away`
+    ? `📏 ${Math.round(me.dist)} km away`
     : "No guess submitted";
   document.getElementById("result-detail").textContent = me ? `+${me.points} points this round` : "";
   document.getElementById("result-comment").textContent = me && me.dist != null ? distanceComment(me.dist) : "";
@@ -1343,7 +1392,7 @@ function submitGuess(forced) {
 
   document.getElementById("results-table").style.display = "none";
   document.getElementById("next-btn").style.display = "inline-block";
-  document.getElementById("result-title").textContent = `${Math.round(dist)} km away`;
+  document.getElementById("result-title").textContent = `📏 ${Math.round(dist)} km away`;
   document.getElementById("result-detail").textContent = `+${points} points · Total: ${totalScore}`;
   document.getElementById("result-comment").textContent = distanceComment(dist);
 }
@@ -1377,13 +1426,14 @@ function nextRound() {
   loadRound();
 }
 
-function startGame() {
+function startGame(practice) {
   if (!TOKEN.startsWith("MLY|")) {
     showToast("Set your token in the TOKEN constant near the top of the script first.", { error: true, duration: 5000 });
     return;
   }
   clearSoloSession();
   isMultiplayer = false;
+  practiceMode = !!practice;
   round = 1; totalScore = 0;
   document.getElementById("score").textContent = 0;
   document.getElementById("start-screen").style.display = "none";
@@ -1395,6 +1445,7 @@ function startGame() {
 
 function resumeSoloSession(solo) {
   isMultiplayer = false;
+  practiceMode = !!solo.practiceMode;
   round = solo.round || 1;
   totalScore = solo.totalScore || 0;
   document.getElementById("start-screen").style.display = "none";
@@ -1410,7 +1461,7 @@ function resumeSoloSession(solo) {
   status.textContent = "Loading street view...";
   currentCoords = (solo.lat != null && solo.lon != null) ? { lat: solo.lat, lon: solo.lon } : null;
   mountViewer(solo.imageId, { onImage: () => { status.style.display = "none"; saveSoloSession(); } });
-  startTimer(SOLO_TIMEOUT_MS);
+  if (!practiceMode) startTimer(SOLO_TIMEOUT_MS);
 }
 
 function showLobby() {
@@ -1418,6 +1469,7 @@ function showLobby() {
   document.getElementById("start-btn").style.display = "none";
   document.getElementById("friends-btn").style.display = "none";
   document.getElementById("start-divider").style.display = "none";
+  document.getElementById("practice-btn").style.display = "none";
 }
 
 // Ask for a name once, then remember it in localStorage — no more retyping
@@ -1431,6 +1483,7 @@ function showNamePrompt(onDone) {
   document.getElementById("start-btn").style.display = "none";
   document.getElementById("friends-btn").style.display = "none";
   document.getElementById("start-divider").style.display = "none";
+  document.getElementById("practice-btn").style.display = "none";
   document.getElementById("name-prompt").style.display = "flex";
   document.getElementById("player-name-input").focus();
 }
@@ -1486,6 +1539,7 @@ function resetToStartScreen() {
   document.getElementById("start-btn").style.display = "inline-block";
   document.getElementById("friends-btn").style.display = "inline-block";
   document.getElementById("start-divider").style.display = "block";
+  document.getElementById("practice-btn").style.display = "inline-block";
 
   document.getElementById("start-screen").style.display = "flex";
 }
@@ -1514,7 +1568,8 @@ function attemptRejoin(session) {
   connectWS(() => ws.send(JSON.stringify({ type: "rejoin", code: session.code, token: session.token })));
 }
 
-document.getElementById("start-btn").addEventListener("click", startGame);
+document.getElementById("start-btn").addEventListener("click", () => startGame(false));
+document.getElementById("practice-btn").addEventListener("click", () => startGame(true));
 document.getElementById("friends-btn").addEventListener("click", () => playWithFriends());
 document.getElementById("save-name-btn").addEventListener("click", () => {
   const input = document.getElementById("player-name-input");
@@ -1555,6 +1610,8 @@ document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
 });
+
+initMusic();
 
 // On load: a shared room link takes priority, then a saved multiplayer
 // session (rejoin in place), then a saved solo session (resume same photo).

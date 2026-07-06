@@ -320,6 +320,7 @@ const server = http.createServer((req, res) => {
       const contentType = {
         '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
         '.svg': 'image/svg+xml', '.gif': 'image/gif', '.webp': 'image/webp',
+        '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav',
       }[path.extname(resolved).toLowerCase()] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': contentType });
       res.end(data);
