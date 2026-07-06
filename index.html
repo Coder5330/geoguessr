@@ -225,9 +225,27 @@
     #nav-hover { width: 54px; height: 54px; }
     #nav-hover img { width: 22px; }
   }
+
+  /* Custom toast — replaces native alert() so messages match the app's look
+     instead of a jarring browser-native popup. */
+  #toast {
+    position: fixed; top: 24px; left: 50%; z-index: 2000;
+    transform: translateX(-50%) translateY(-16px);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 13px 20px; border-radius: 10px; font-size: 14px; font-weight: 600;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    opacity: 0; pointer-events: none; max-width: min(90vw, 420px); text-align: center;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.toast-error { border-color: var(--danger); }
+  #toast.toast-error::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
 </style>
 </head>
 <body>
+
+<div id="toast"></div>
 
 <div id="start-screen">
   <img src="assets/logo.png" alt="" id="logo" />
@@ -295,6 +313,18 @@
 </div>
 
 <script>
+// Custom toast notification — replaces native alert() so messages match the
+// app's own dark theme instead of a jarring browser-native popup.
+let toastHideTimer = null;
+function showToast(message, { error = false, duration = 2600 } = {}) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.classList.toggle('toast-error', error);
+  el.classList.add('show');
+  clearTimeout(toastHideTimer);
+  toastHideTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+
 let TOKEN = "__MAPILLARY_TOKEN__"; // injected by server.js from the MAPILLARY_TOKEN env var at request time
 // Auto-detects the server's own address — works because the game is now served
 // from the same Railway app that runs the WebSocket server. If you ever open
@@ -921,7 +951,7 @@ function scoreFromDistance(km) {
 
 function connectWS(onOpen) {
   if (!WS_URL || WS_URL.includes("PASTE_YOUR")) {
-    alert("Set WS_URL near the top of the script to your deployed Railway domain first.");
+    showToast("Set WS_URL near the top of the script to your deployed Railway domain first.", { error: true, duration: 5000 });
     return;
   }
   ws = new WebSocket(WS_URL);
@@ -1067,7 +1097,7 @@ function handleWSMessage(msg) {
   }
 
   else if (msg.type === "error") {
-    alert(msg.message);
+    showToast(msg.message, { error: true });
   }
 }
 
@@ -1185,7 +1215,7 @@ function showMultiplayerGameOver(msg) {
 }
 
 function submitGuessMultiplayer() {
-  if (!guessMarker) { alert("Click the map to place a guess first"); return; }
+  if (!guessMarker) { showToast("Click the map to place a guess first"); return; }
   if (hasGuessedThisRound) return;
   hasGuessedThisRound = true;
   document.getElementById("guess-btn").disabled = true;
@@ -1241,7 +1271,7 @@ function initMap() {
 
 function submitGuess(forced) {
   if (!guessMarker) {
-    if (!forced) { alert("Click the map to place a guess first"); return; }
+    if (!forced) { showToast("Click the map to place a guess first"); return; }
     stopTimer();
     document.getElementById("results-table").style.display = "none";
     document.getElementById("next-btn").style.display = "inline-block";
@@ -1304,7 +1334,7 @@ function nextRound() {
 
 function startGame() {
   if (!TOKEN.startsWith("MLY|")) {
-    alert("Set your token in the TOKEN constant near the top of the script first.");
+    showToast("Set your token in the TOKEN constant near the top of the script first.", { error: true, duration: 5000 });
     return;
   }
   clearSoloSession();
@@ -1392,7 +1422,7 @@ function requireName() {
   const input = document.getElementById("name-input");
   const name = input.value.trim();
   if (!name) {
-    alert("Enter your name first");
+    showToast("Enter your name first");
     input.focus();
     return null;
   }
@@ -1411,7 +1441,7 @@ function joinRoom(codeOverride) {
   const name = requireName();
   if (!name) return;
   const code = codeOverride || document.getElementById("join-code-input").value.trim().toUpperCase();
-  if (!code) { alert("Enter a room code"); return; }
+  if (!code) { showToast("Enter a room code"); return; }
   myName = name;
   isMultiplayer = true;
   connectWS(() => ws.send(JSON.stringify({ type: "join_room", name, code })));
