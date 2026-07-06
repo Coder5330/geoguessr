@@ -279,11 +279,49 @@
     padding: 8px 10px; border-radius: 6px; font-size: 13px; cursor: pointer;
   }
   .menu-dropdown-item:hover { background: var(--panel-2); }
+
+  #auth-modal, #leaderboard-modal {
+    position: fixed; inset: 0; z-index: 2100; display: none;
+    align-items: center; justify-content: center; background: rgba(6,8,12,0.85);
+  }
+  #auth-modal.open, #leaderboard-modal.open { display: flex; }
+  #auth-card, #leaderboard-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 28px 32px; display: flex; flex-direction: column; gap: 12px; align-items: center;
+    max-width: 340px; width: 100%; text-align: center;
+  }
+  #auth-card input {
+    width: 100%; padding: 10px 14px; font-size: 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); text-align: center;
+  }
+  #leaderboard-card { max-width: 380px; }
+  #leaderboard-table { width: 100%; text-align: left; font-size: 14px; border-collapse: collapse; }
+  #leaderboard-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  #leaderboard-table tr:first-child td { color: var(--accent); font-weight: 700; }
 </style>
 </head>
 <body>
 
 <div id="toast"></div>
+
+<div id="auth-modal">
+  <div id="auth-card">
+    <h2 id="auth-title">Sign Up</h2>
+    <input id="auth-username" type="text" placeholder="Username" maxlength="20" autocomplete="username" />
+    <input id="auth-password" type="password" placeholder="Password" maxlength="100" autocomplete="current-password" />
+    <button class="btn" id="auth-submit-btn">Sign Up</button>
+    <button class="btn-ghost" id="auth-switch-btn">Already have an account? Log in</button>
+    <button class="btn-ghost" id="auth-close-btn">Cancel</button>
+  </div>
+</div>
+
+<div id="leaderboard-modal">
+  <div id="leaderboard-card">
+    <h2 style="margin:0;">🏆 Leaderboard</h2>
+    <table id="leaderboard-table"></table>
+    <button class="btn-ghost" id="leaderboard-close-btn">Close</button>
+  </div>
+</div>
 <audio id="bg-music" src="assets/music.mp3" loop preload="auto"></audio>
 
 <div id="start-screen">
@@ -295,6 +333,10 @@
   <div class="divider" id="start-divider">or</div>
   <button class="btn btn-secondary" id="friends-btn">Play with friends</button>
   <button class="btn-ghost" id="practice-btn" style="margin-top:2px;">Practice mode (no timer)</button>
+  <div id="start-account-row" style="display:flex; gap:8px; margin-top:6px;">
+    <button class="btn-ghost" id="account-btn">👤 Sign in / Sign up</button>
+    <button class="btn-ghost" id="leaderboard-btn">🏆 Leaderboard</button>
+  </div>
 
   <div id="name-prompt" style="display:none; flex-direction:column; gap:12px; align-items:center;">
     <p style="color:var(--text-dim); font-size:14px; margin:0;">What should we call you?</p>
@@ -337,6 +379,8 @@
         <button id="menu-btn" class="hud-pill hud-menu">Menu ⋮</button>
         <div id="menu-dropdown">
           <button id="menu-music-toggle" class="menu-dropdown-item">🔊 Music: On</button>
+          <button id="menu-account-btn" class="menu-dropdown-item">👤 Sign in / Sign up</button>
+          <button id="menu-leaderboard-btn" class="menu-dropdown-item">🏆 Leaderboard</button>
         </div>
       </div>
       <button id="leave-btn" class="hud-pill hud-leave">Leave</button>
@@ -416,6 +460,143 @@ function startMusicPlayback() {
   musicStarted = true;
   const music = document.getElementById('bg-music');
   music.play().catch(() => {}); // ignore autoplay rejection — user can use the toggle
+}
+
+// --- Accounts + score saving ---
+const AUTH_TOKEN_KEY = "gw_auth_token";
+const AUTH_USERNAME_KEY = "gw_auth_username";
+let authToken = null;
+let authUsername = null;
+let authMode = "signup"; // or "login"
+let pendingScoreToSave = null; // set when the auth modal was opened specifically to save a score
+
+async function apiRequest(path, { method = "GET", body, auth = false } = {}) {
+  const headers = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (auth && authToken) headers["Authorization"] = "Bearer " + authToken;
+  const res = await fetch(path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  let data = null;
+  try { data = await res.json(); } catch {}
+  if (!res.ok) throw new Error((data && data.error) || "Request failed");
+  return data;
+}
+
+function updateAuthUI() {
+  const loggedIn = !!authToken;
+  document.getElementById("account-btn").textContent = loggedIn ? `👤 ${authUsername} (Log out)` : "👤 Sign in / Sign up";
+  document.getElementById("menu-account-btn").textContent = loggedIn ? `👤 ${authUsername} (Log out)` : "👤 Sign in / Sign up";
+  // The result-screen button text/behavior adapts: once logged in it directly
+  // saves your score instead of prompting to sign up first.
+  document.getElementById("signup-btn").textContent = loggedIn ? "💾 Save score" : "👤 Sign up to save your score!";
+}
+function setAuthSession(token, username) {
+  authToken = token; authUsername = username;
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  localStorage.setItem(AUTH_USERNAME_KEY, username);
+  updateAuthUI();
+}
+function clearAuthSession() {
+  authToken = null; authUsername = null;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USERNAME_KEY);
+  updateAuthUI();
+}
+async function restoreAuthSession() {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) return;
+  authToken = token;
+  authUsername = localStorage.getItem(AUTH_USERNAME_KEY);
+  try {
+    const me = await apiRequest("/api/me", { auth: true });
+    authUsername = me.username;
+  } catch {
+    clearAuthSession();
+    return;
+  }
+  updateAuthUI();
+}
+function logOut() {
+  apiRequest("/api/logout", { method: "POST", auth: true }).catch(() => {});
+  clearAuthSession();
+  showToast("Logged out");
+}
+
+function openAuthModal() {
+  authMode = "signup";
+  applyAuthMode();
+  document.getElementById("auth-username").value = "";
+  document.getElementById("auth-password").value = "";
+  document.getElementById("auth-modal").classList.add("open");
+  document.getElementById("auth-username").focus();
+}
+function closeAuthModal() {
+  document.getElementById("auth-modal").classList.remove("open");
+}
+function applyAuthMode() {
+  const isSignup = authMode === "signup";
+  document.getElementById("auth-title").textContent = isSignup ? "Sign Up" : "Log In";
+  document.getElementById("auth-submit-btn").textContent = isSignup ? "Sign Up" : "Log In";
+  document.getElementById("auth-switch-btn").textContent = isSignup ? "Already have an account? Log in" : "Don't have an account? Sign up";
+}
+async function submitAuthForm() {
+  const username = document.getElementById("auth-username").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!username || !password) { showToast("Enter a username and password"); return; }
+  try {
+    const data = await apiRequest(authMode === "signup" ? "/api/signup" : "/api/login", { method: "POST", body: { username, password } });
+    setAuthSession(data.token, data.username);
+    closeAuthModal();
+    showToast(`Welcome, ${data.username}!`);
+    if (pendingScoreToSave != null) {
+      await saveScore(pendingScoreToSave);
+      pendingScoreToSave = null;
+    }
+  } catch (err) {
+    showToast(err.message, { error: true });
+  }
+}
+async function saveScore(score) {
+  try {
+    await apiRequest("/api/score", { method: "POST", auth: true, body: { score } });
+    showToast("Score saved!");
+  } catch (err) {
+    showToast("Could not save score: " + err.message, { error: true });
+  }
+}
+// The current player's own final score — used when the "save score" button
+// is clicked on an actual game-over screen (solo or multiplayer).
+function finalScoreForSaving() {
+  if (isMultiplayer) {
+    const me = latestPlayers.find((p) => p.id === myId);
+    return me ? me.score : 0;
+  }
+  return totalScore;
+}
+function handleSaveScoreClick() {
+  const score = finalScoreForSaving();
+  if (authToken) {
+    saveScore(score);
+  } else {
+    pendingScoreToSave = score;
+    openAuthModal();
+  }
+}
+
+async function openLeaderboard() {
+  const table = document.getElementById("leaderboard-table");
+  table.innerHTML = "<tr><td>Loading…</td></tr>";
+  document.getElementById("leaderboard-modal").classList.add("open");
+  try {
+    const data = await apiRequest("/api/leaderboard");
+    table.innerHTML = data.leaderboard.length
+      ? data.leaderboard.map((r, i) => `<tr><td>#${i + 1}</td><td>${r.username}</td><td><b>${r.best}</b></td></tr>`).join("")
+      : "<tr><td>No scores saved yet — be the first!</td></tr>";
+  } catch {
+    table.innerHTML = "<tr><td>Couldn't load the leaderboard.</td></tr>";
+  }
+}
+function closeLeaderboard() {
+  document.getElementById("leaderboard-modal").classList.remove("open");
 }
 
 let TOKEN = "__MAPILLARY_TOKEN__"; // injected by server.js from the MAPILLARY_TOKEN env var at request time
@@ -1181,6 +1362,7 @@ function handleWSMessage(msg) {
         document.getElementById("result-detail").textContent = "Waiting for the host to continue...";
         document.getElementById("result-comment").textContent = "";
         document.getElementById("results-table").style.display = "none";
+        document.getElementById("signup-btn").style.display = "none";
         enterResultMapView();
         const btn = document.getElementById("next-btn");
         if (myId === hostId) {
@@ -1321,6 +1503,7 @@ function showMultiplayerResult(msg) {
     : "No guess submitted";
   document.getElementById("result-detail").textContent = me ? `+${me.points} points this round` : "";
   document.getElementById("result-comment").textContent = me && me.dist != null ? distanceComment(me.dist) : "";
+  document.getElementById("signup-btn").style.display = "none"; // only offered at the actual game-over screen
 
   const table = document.getElementById("results-table");
   table.style.display = "table";
@@ -1365,6 +1548,7 @@ function showMultiplayerGameOver(msg) {
   table.innerHTML = sorted.map((p, i) => `<tr><td>#${i + 1}</td><td>${p.name}</td><td><b>${p.score}</b></td></tr>`).join("");
   const btn = document.getElementById("next-btn");
   btn.style.display = "none";
+  document.getElementById("signup-btn").style.display = "inline-block";
 }
 
 function submitGuessMultiplayer() {
@@ -1431,6 +1615,7 @@ function submitGuess(forced) {
     document.getElementById("result-title").textContent = "Time's up!";
     document.getElementById("result-detail").textContent = `+0 points · Total: ${totalScore}`;
     document.getElementById("result-comment").textContent = "";
+    document.getElementById("signup-btn").style.display = "none";
     document.getElementById("result").style.display = "flex";
     enterResultMapView();
     return;
@@ -1453,6 +1638,7 @@ function submitGuess(forced) {
 
   document.getElementById("results-table").style.display = "none";
   document.getElementById("next-btn").style.display = "inline-block";
+  document.getElementById("signup-btn").style.display = "none";
   document.getElementById("result-title").textContent = `📏 ${Math.round(dist)} km away`;
   document.getElementById("result-detail").textContent = `+${points} points · Total: ${totalScore}`;
   document.getElementById("result-comment").textContent = distanceComment(dist);
@@ -1471,6 +1657,7 @@ function nextRound() {
     clearSoloSession();
     document.getElementById("result-title").textContent = "Game over";
     document.getElementById("result-detail").textContent = `Final score: ${totalScore} / ${MAX_ROUNDS * 5000}`;
+    document.getElementById("signup-btn").style.display = practiceMode ? "none" : "inline-block";
     document.getElementById("result").style.display = "flex";
     const btn = document.getElementById("next-btn");
     btn.textContent = "Play again";
@@ -1539,6 +1726,7 @@ function showLobby() {
   document.getElementById("friends-btn").style.display = "none";
   document.getElementById("start-divider").style.display = "none";
   document.getElementById("practice-btn").style.display = "none";
+  document.getElementById("start-account-row").style.display = "none";
 }
 
 // Ask for a name once, then remember it in localStorage — no more retyping
@@ -1553,6 +1741,7 @@ function showNamePrompt(onDone) {
   document.getElementById("friends-btn").style.display = "none";
   document.getElementById("start-divider").style.display = "none";
   document.getElementById("practice-btn").style.display = "none";
+  document.getElementById("start-account-row").style.display = "none";
   document.getElementById("name-prompt").style.display = "flex";
   document.getElementById("player-name-input").focus();
 }
@@ -1611,6 +1800,7 @@ function resetToStartScreen() {
   document.getElementById("friends-btn").style.display = "inline-block";
   document.getElementById("start-divider").style.display = "block";
   document.getElementById("practice-btn").style.display = "inline-block";
+  document.getElementById("start-account-row").style.display = "flex";
 
   document.getElementById("start-screen").style.display = "flex";
 }
@@ -1685,12 +1875,33 @@ document.addEventListener("click", (e) => {
   const wrap = document.getElementById("menu-wrap");
   if (!wrap.contains(e.target)) document.getElementById("menu-dropdown").classList.remove("open");
 });
+function onAccountButtonClick() {
+  if (authToken) logOut();
+  else openAuthModal();
+}
+document.getElementById("account-btn").addEventListener("click", onAccountButtonClick);
+document.getElementById("menu-account-btn").addEventListener("click", onAccountButtonClick);
+document.getElementById("leaderboard-btn").addEventListener("click", openLeaderboard);
+document.getElementById("menu-leaderboard-btn").addEventListener("click", openLeaderboard);
+document.getElementById("leaderboard-close-btn").addEventListener("click", closeLeaderboard);
+document.getElementById("auth-close-btn").addEventListener("click", closeAuthModal);
+document.getElementById("auth-submit-btn").addEventListener("click", submitAuthForm);
+document.getElementById("auth-switch-btn").addEventListener("click", () => {
+  authMode = authMode === "signup" ? "login" : "signup";
+  applyAuthMode();
+});
+document.getElementById("auth-password").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitAuthForm();
+});
+document.getElementById("signup-btn").addEventListener("click", handleSaveScoreClick);
 document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
 });
 
 initMusic();
+updateAuthUI();
+restoreAuthSession();
 
 // On load: a shared room link takes priority, then a saved multiplayer
 // session (rejoin in place), then a saved solo session (resume same photo).

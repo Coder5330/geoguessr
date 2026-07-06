@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import Database from 'better-sqlite3';
 import { WebSocketServer } from 'ws';
 import Protobuf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
@@ -19,6 +20,145 @@ const DISCONNECT_GRACE_MS = 30000;
 
 if (!TOKEN) {
   console.error('MAPILLARY_TOKEN environment variable is not set. Set it in Railway before deploying.');
+}
+
+// --- Accounts + score persistence ---
+// Note: this SQLite file lives on Railway's local disk, which is ephemeral —
+// a redeploy can wipe it unless a persistent volume is attached. Fine for
+// now, but worth attaching a Railway volume at this path if you want scores
+// to survive redeploys long-term.
+const db = new Database(path.join(__dirname, 'data.db'));
+db.pragma('journal_mode = WAL');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+const sessionTokens = new Map(); // token -> userId, in-memory (fine to reset on restart — just requires logging in again)
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+const MAX_POSSIBLE_SCORE = 5000 * MAX_ROUNDS;
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+function createUser(username, password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const passwordHash = hashPassword(password, salt);
+  const info = db.prepare('INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)')
+    .run(username, passwordHash, salt, Date.now());
+  return { id: info.lastInsertRowid, username };
+}
+function findUserByUsername(username) {
+  return db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+}
+function verifyPassword(user, password) {
+  const hash = Buffer.from(hashPassword(password, user.salt), 'hex');
+  const stored = Buffer.from(user.password_hash, 'hex');
+  return hash.length === stored.length && crypto.timingSafeEqual(hash, stored);
+}
+function createSession(userId) {
+  const token = crypto.randomUUID();
+  sessionTokens.set(token, userId);
+  return token;
+}
+function getAuthUser(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) return null;
+  const userId = sessionTokens.get(token);
+  if (!userId) return null;
+  return db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId) || null;
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1e6) { reject(new Error('Payload too large')); req.destroy(); }
+    });
+    req.on('end', () => {
+      try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
+
+async function handleSignup(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'Invalid request body' }); }
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  if (!USERNAME_RE.test(username)) {
+    return sendJson(res, 400, { error: 'Username must be 3-20 characters (letters, numbers, underscore).' });
+  }
+  if (password.length < 6) {
+    return sendJson(res, 400, { error: 'Password must be at least 6 characters.' });
+  }
+  if (findUserByUsername(username)) {
+    return sendJson(res, 409, { error: 'That username is already taken.' });
+  }
+  const user = createUser(username, password);
+  sendJson(res, 200, { token: createSession(user.id), username: user.username });
+}
+async function handleLogin(req, res) {
+  let body;
+  try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'Invalid request body' }); }
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  const user = findUserByUsername(username);
+  if (!user || !verifyPassword(user, password)) {
+    return sendJson(res, 401, { error: 'Incorrect username or password.' });
+  }
+  sendJson(res, 200, { token: createSession(user.id), username: user.username });
+}
+function handleLogout(req, res) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (token) sessionTokens.delete(token);
+  sendJson(res, 200, { ok: true });
+}
+function handleMe(req, res) {
+  const user = getAuthUser(req);
+  if (!user) return sendJson(res, 401, { error: 'Not logged in' });
+  sendJson(res, 200, { username: user.username });
+}
+async function handleSubmitScore(req, res) {
+  const user = getAuthUser(req);
+  if (!user) return sendJson(res, 401, { error: 'Not logged in' });
+  let body;
+  try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'Invalid request body' }); }
+  const score = Number(body.score);
+  if (!Number.isFinite(score) || score < 0 || score > MAX_POSSIBLE_SCORE) {
+    return sendJson(res, 400, { error: 'Invalid score' });
+  }
+  db.prepare('INSERT INTO scores (user_id, score, created_at) VALUES (?, ?, ?)').run(user.id, Math.round(score), Date.now());
+  sendJson(res, 200, { ok: true });
+}
+function handleLeaderboard(req, res) {
+  const rows = db.prepare(`
+    SELECT u.username AS username, MAX(s.score) AS best
+    FROM scores s JOIN users u ON u.id = s.user_id
+    GROUP BY u.id
+    ORDER BY best DESC
+    LIMIT 20
+  `).all();
+  sendJson(res, 200, { leaderboard: rows });
 }
 
 // Spread across every inhabited continent so rounds don't keep clustering
@@ -365,6 +505,17 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  // A thrown/rejected async handler must not crash the whole server over one bad request.
+  const guard = (fn) => fn(req, res).catch((err) => {
+    console.error('API handler error:', err);
+    if (!res.headersSent) sendJson(res, 500, { error: 'Server error' });
+  });
+  if (pathname === '/api/signup' && req.method === 'POST') return guard(handleSignup);
+  if (pathname === '/api/login' && req.method === 'POST') return guard(handleLogin);
+  if (pathname === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
+  if (pathname === '/api/me' && req.method === 'GET') return handleMe(req, res);
+  if (pathname === '/api/score' && req.method === 'POST') return guard(handleSubmitScore);
+  if (pathname === '/api/leaderboard' && req.method === 'GET') return handleLeaderboard(req, res);
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('GuessWhere multiplayer server is running.');
 });
