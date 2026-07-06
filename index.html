@@ -39,6 +39,7 @@
   }
   #start-screen h1 { margin: 0; font-size: 42px; letter-spacing: -0.5px; }
   #start-screen h1 span { color: var(--accent); }
+  #logo { width: 72px; height: auto; margin-bottom: 4px; }
   #start-screen input {
     width: 320px; max-width: 90vw; padding: 12px 14px; font-size: 14px; border-radius: 8px;
     border: 1px solid var(--border); background: var(--panel); color: var(--text); text-align: center;
@@ -229,6 +230,7 @@
 <body>
 
 <div id="start-screen">
+  <img src="assets/logo.png" alt="" id="logo" />
   <h1>Geo<span>Guessr</span></h1>
   <p style="color:var(--text-dim); max-width:420px; font-size:14px">Walk around a real street using the arrows, then guess where you are on the map.</p>
   <button class="btn" id="start-btn">Play solo</button>
@@ -619,10 +621,10 @@ let navSpatialEdges = [];
 let navBearingDeg = 0; // current view bearing, degrees clockwise from north
 let navLastPoint = null; // last known {x,y} client coords while hovering, or null
 let navPointerDownAt = null;
-let navMovementEnabled = true; // false once results are showing for the round
+let roundActive = true; // false once results are showing — blocks both nav movement and placing/moving the guess pin
 
 function tryMoveNavSlot(slotEl) {
-  if (!navMovementEnabled || !mlyViewer || slotEl.dataset.direction === undefined) return;
+  if (!roundActive || !mlyViewer || slotEl.dataset.direction === undefined) return;
   mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
 }
 
@@ -734,7 +736,7 @@ function nearNavCluster(clientX, clientY) {
   return clientX >= minLeft - pad && clientX <= maxRight + pad && clientY >= minTop - pad && clientY <= maxBottom + pad;
 }
 function handleNavHoverAt(clientX, clientY) {
-  if (!navMovementEnabled) { hideNavHover(); return; }
+  if (!roundActive) { hideNavHover(); return; }
   // Don't show the hover badge near the always-visible arrows — they're
   // already directly clickable, so a second control right on top is just clutter.
   if (nearNavCluster(clientX, clientY)) { hideNavHover(); return; }
@@ -1035,18 +1037,22 @@ function enterResultMapView() {
   document.getElementById('map-wrap').classList.add('result-view');
   if (map) map.invalidateSize();
   // The round is already decided once results are showing — walking around
-  // further would be harmless (you can't guess again) but still shouldn't
-  // be possible, so disable and hide the nav arrows until the next round.
-  navMovementEnabled = false;
+  // or looking around further would be harmless (you can't guess again) but
+  // still shouldn't be possible, so disable and hide the nav arrows, and
+  // block all interaction with the photo (including Mapillary's own
+  // drag-to-look-around) until the next round.
+  roundActive = false;
   hideNavHover();
   for (const slot of ['up', 'down', 'left', 'right']) {
     document.getElementById('nav-' + slot).style.display = 'none';
   }
+  document.getElementById('photo-panel').style.pointerEvents = 'none';
 }
 function exitResultMapView() {
   document.getElementById('map-wrap').classList.remove('result-view');
   if (map) map.invalidateSize();
-  navMovementEnabled = true;
+  roundActive = true;
+  document.getElementById('photo-panel').style.pointerEvents = '';
 }
 
 function showMultiplayerResult(msg) {
@@ -1124,6 +1130,9 @@ function initMap() {
   }).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, noWrap: true }).addTo(map);
   map.on('click', (e) => {
+    // Once results are showing, the guess is already scored — clicking the
+    // (still-zoomable) result map shouldn't be able to move the pin anymore.
+    if (!roundActive) return;
     if (guessMarker) map.removeLayer(guessMarker);
     guessMarker = L.marker(e.latlng.wrap()).addTo(map);
   });
