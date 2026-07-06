@@ -128,6 +128,29 @@
     padding: 15px 46px; font-size: 16px; box-shadow: 0 6px 20px rgba(34,197,94,0.35);
   }
 
+  /* Our own always-visible movement controls, replacing Mapillary's built-in
+     on-image direction arrows (component: direction) which faded in/out
+     unpredictably as edge data loaded. Buttons stay on screen at all times;
+     only their enabled/disabled state changes as available directions for
+     the current image come in via the sequenceedges/spatialedges events. */
+  #nav-pad {
+    position: absolute; bottom: 20px; left: 20px; z-index: 600;
+    display: grid; grid-template-columns: 44px 44px 44px; grid-template-rows: 44px 44px;
+    gap: 6px;
+  }
+  .nav-btn {
+    width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--border);
+    background: rgba(15,18,25,0.85); backdrop-filter: blur(6px); color: var(--text);
+    font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .nav-btn:hover:not(:disabled) { background: rgba(34,197,94,0.25); border-color: var(--accent); }
+  .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  #nav-forward { grid-column: 2; grid-row: 1; }
+  #nav-left { grid-column: 1; grid-row: 2; }
+  #nav-right { grid-column: 3; grid-row: 2; }
+  #nav-backward { grid-column: 2; grid-row: 2; }
+
   #result {
     position: fixed; left: 0; right: 0; bottom: 0; background: rgba(10,12,18,0.97);
     backdrop-filter: blur(8px); border-top: 1px solid var(--border);
@@ -174,6 +197,8 @@
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; top: 40px; }
     #result { padding: 14px 16px; }
+    #nav-pad { bottom: 66px; left: 10px; grid-template-columns: 36px 36px 36px; grid-template-rows: 36px 36px; gap: 4px; }
+    .nav-btn { width: 36px; height: 36px; font-size: 13px; }
   }
 </style>
 </head>
@@ -226,6 +251,12 @@
   </div>
   <button id="guess-btn" class="btn">Guess</button>
   <div id="map-wrap"><div id="map"></div></div>
+  <div id="nav-pad">
+    <button id="nav-forward" class="nav-btn" title="Forward" disabled>&#9650;</button>
+    <button id="nav-left" class="nav-btn" title="Turn left" disabled>&#9664;</button>
+    <button id="nav-right" class="nav-btn" title="Turn right" disabled>&#9654;</button>
+    <button id="nav-backward" class="nav-btn" title="Backward" disabled>&#9660;</button>
+  </div>
 </div>
 
 <div id="result">
@@ -522,14 +553,51 @@ function mountViewer(imageId, { onImage } = {}) {
     accessToken: TOKEN,
     container: 'mly',
     imageId: imageId,
-    component: { cover: false },
+    // Disable every bit of Mapillary's own UI chrome, including `direction`
+    // (its on-image navigation arrows, which faded in/out unreliably as edge
+    // data loaded) — our own fixed #nav-pad below replaces it. Edge data
+    // itself (sequenceedges/spatialedges) is unaffected by this and still
+    // drives moveDir(), since that's core Navigator behavior, not tied to
+    // whether the visual component is enabled. Keep `attribution` since
+    // Mapillary requires it.
+    component: { cover: false, bearing: false, zoom: false, sequence: false, direction: false },
   });
   mlyViewer.on('image', (event) => {
     if (event.image && event.image.lngLat) {
       currentCoords = { lat: event.image.lngLat.lat, lon: event.image.lngLat.lng };
     }
+    resetNavAvailability();
     if (onImage) onImage();
   });
+  mlyViewer.on('sequenceedges', (event) => addNavDirections(event.status));
+  mlyViewer.on('spatialedges', (event) => addNavDirections(event.status));
+}
+
+// --- Custom navigation pad (replaces Mapillary's flaky on-image arrows) ---
+// available directions for the CURRENT image only; reset on every new image.
+let navAvailable = new Set();
+
+function resetNavAvailability() {
+  navAvailable = new Set();
+  updateNavButtons();
+}
+function addNavDirections(status) {
+  if (!status.cached) return;
+  for (const edge of status.edges) navAvailable.add(edge.data.direction);
+  updateNavButtons();
+}
+function updateNavButtons() {
+  const D = mapillary.NavigationDirection;
+  document.getElementById('nav-forward').disabled = !(navAvailable.has(D.StepForward) || navAvailable.has(D.Next));
+  document.getElementById('nav-backward').disabled = !(navAvailable.has(D.StepBackward) || navAvailable.has(D.Prev));
+  document.getElementById('nav-left').disabled = !navAvailable.has(D.TurnLeft);
+  document.getElementById('nav-right').disabled = !navAvailable.has(D.TurnRight);
+}
+function moveNav(...candidates) {
+  if (!mlyViewer) return;
+  const dir = candidates.find((d) => navAvailable.has(d));
+  if (dir === undefined) return;
+  mlyViewer.moveDir(dir).catch(() => {});
 }
 
 async function loadRound(tried = []) {
@@ -1097,6 +1165,18 @@ document.getElementById("guess-btn").addEventListener("click", () => {
 document.getElementById("leave-btn").addEventListener("click", leaveGame);
 document.getElementById("lobby-leave-btn").addEventListener("click", leaveGame);
 document.getElementById("result-leave-btn").addEventListener("click", leaveGame);
+document.getElementById("nav-forward").addEventListener("click", () => {
+  moveNav(mapillary.NavigationDirection.StepForward, mapillary.NavigationDirection.Next);
+});
+document.getElementById("nav-backward").addEventListener("click", () => {
+  moveNav(mapillary.NavigationDirection.StepBackward, mapillary.NavigationDirection.Prev);
+});
+document.getElementById("nav-left").addEventListener("click", () => {
+  moveNav(mapillary.NavigationDirection.TurnLeft);
+});
+document.getElementById("nav-right").addEventListener("click", () => {
+  moveNav(mapillary.NavigationDirection.TurnRight);
+});
 document.getElementById("next-btn").addEventListener("click", () => {
   if (!isMultiplayer) nextRound();
   // multiplayer next-btn's onclick is set dynamically in showMultiplayerResult
