@@ -819,11 +819,31 @@ async function loadRound(tried = []) {
     if (!start) return loadRound([...tried, ...batch.map(s => s.name)]);
 
     currentCoords = { lat: start.lat, lon: start.lon };
+
+    // If the viewer never fires its image event (Mapillary busy/rate-limited),
+    // don't hang on "Loading..." forever — surface a retry after a timeout.
+    let loaded = false;
+    const loadTimeout = setTimeout(() => {
+      if (loaded) return;
+      status.innerHTML = "Street view is taking too long to load — Mapillary may be busy.<br><br>" +
+        "<button class='btn' id='retry-btn'>Try again</button>";
+      const rb = document.getElementById("retry-btn");
+      if (rb) rb.onclick = () => loadRound();
+    }, 15000);
+
     mountViewer(start.id, {
-      onImage: () => { status.style.display = "none"; saveSoloSession(); }
+      onImage: () => {
+        if (loaded) return;
+        loaded = true;
+        clearTimeout(loadTimeout);
+        status.style.display = "none";
+        // Start the guess clock only once the image is actually visible, not
+        // while it's still loading (otherwise slow loads eat into your time).
+        startTimer(SOLO_TIMEOUT_MS);
+        saveSoloSession();
+      }
     });
     saveSoloSession();
-    startTimer(SOLO_TIMEOUT_MS);
   } catch (err) {
     status.textContent = "Error: " + err.message;
   }
