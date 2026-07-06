@@ -658,28 +658,43 @@ function azimuthToBearingDeg(azimuthRad) {
   const deg = (-azimuthRad + Math.PI / 2) * 180 / Math.PI;
   return ((deg % 360) + 360) % 360;
 }
-function navSlotForEdge(edge) {
+// Relative angle of an edge vs. your current view: 0 = straight ahead,
+// +90 = directly to your right, -90 = directly to your left, +-180 = behind.
+function navRelativeAngleForEdge(edge) {
   const D = mapillary.NavigationDirection;
-  let relative;
   if (Number.isNaN(edge.data.worldMotionAzimuth)) {
     // Sequence Next/Prev carry no real bearing — approximate them as
     // straight ahead/behind wherever you're currently facing.
-    relative = edge.data.direction === D.Prev ? 180 : 0;
-  } else {
-    const edgeBearing = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
-    relative = ((edgeBearing - navBearingDeg + 180) % 360 + 360) % 360 - 180; // (-180, 180]
+    return edge.data.direction === D.Prev ? 180 : 0;
   }
+  const edgeBearing = azimuthToBearingDeg(edge.data.worldMotionAzimuth);
+  return ((edgeBearing - navBearingDeg + 180) % 360 + 360) % 360 - 180; // (-180, 180]
+}
+function navSlotForAngle(relative) {
   const abs = Math.abs(relative);
   if (abs <= 45) return 'up';
   if (abs >= 135) return 'down';
   return relative > 0 ? 'right' : 'left';
 }
+// Smallest signed difference between two angles, both in (-180, 180].
+function navAngleDiff(a, b) {
+  return Math.abs(((a - b + 180) % 360 + 360) % 360 - 180);
+}
+// Icon rotation for a given relative angle — arrow.png points down at 0deg,
+// and 0deg-relative (straight ahead) needs to point up (180deg), rotating
+// clockwise as relative increases (matching a click/turn to the right).
+function navRotationForAngle(relative) {
+  return ((180 + relative) % 360 + 360) % 360;
+}
 function updateNavSlots() {
   const best = { up: null, down: null, left: null, right: null };
+  const bestAngle = { up: null, down: null, left: null, right: null };
   for (const edge of [...navSequenceEdges, ...navSpatialEdges]) {
-    const slot = navSlotForEdge(edge);
+    const relative = navRelativeAngleForEdge(edge);
+    const slot = navSlotForAngle(relative);
     if (!best[slot] || navPriority(edge.data.direction) < navPriority(best[slot].data.direction)) {
       best[slot] = edge;
+      bestAngle[slot] = relative;
     }
   }
   for (const slot of ['up', 'down', 'left', 'right']) {
@@ -687,21 +702,44 @@ function updateNavSlots() {
     if (best[slot]) {
       el.style.display = 'block';
       el.dataset.direction = String(best[slot].data.direction);
+      el.dataset.angle = String(bestAngle[slot]);
+      // Rotate to the edge's actual bearing, not just a fixed per-slot
+      // rotation — a "forward" path that's slightly off-center should visibly
+      // lean that way instead of always pointing dead straight up.
+      el.style.transform = `translateX(-50%) rotate(${navRotationForAngle(bestAngle[slot])}deg)`;
     } else {
       el.style.display = 'none';
       delete el.dataset.direction;
+      delete el.dataset.angle;
     }
   }
   refreshNavHover(); // if already hovering, reflect any change immediately
 }
 
-// Classic "X divides a rectangle into 4 triangles" hit test, using
-// normalized offsets so it works regardless of the container's aspect ratio.
-function navHoverZoneFor(rect, clientX, clientY) {
-  const dx = (clientX - (rect.left + rect.width / 2)) / rect.width;
-  const dy = (clientY - (rect.top + rect.height / 2)) / rect.height;
-  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
-  return dy < 0 ? 'up' : 'down';
+// Angle of a click/hover point relative to the photo's center, in the same
+// 0=ahead/+90=right/-90=left/+-180=behind convention as edge angles — this
+// (not a crude up/down/left/right quadrant split) is what lets "closer to
+// the bottom of the screen than the top, but clearly on the road ahead"
+// still correctly resolve to forward: whichever available direction's real
+// angle is numerically closest to where you clicked wins, however close it
+// actually sits to the exact center of the frame.
+function navPointAngle(rect, clientX, clientY) {
+  const dx = clientX - (rect.left + rect.width / 2);
+  const dy = clientY - (rect.top + rect.height / 2);
+  return Math.atan2(dx, -dy) * 180 / Math.PI;
+}
+function navClosestSlotFor(clientX, clientY) {
+  const panel = document.getElementById('photo-panel');
+  const rect = panel.getBoundingClientRect();
+  const pointAngle = navPointAngle(rect, clientX, clientY);
+  let bestSlot = null, bestDiff = Infinity;
+  for (const slot of ['up', 'down', 'left', 'right']) {
+    const el = document.getElementById('nav-' + slot);
+    if (el.dataset.angle === undefined) continue;
+    const diff = navAngleDiff(pointAngle, Number(el.dataset.angle));
+    if (diff < bestDiff) { bestDiff = diff; bestSlot = slot; }
+  }
+  return bestSlot;
 }
 function hideNavHover() {
   document.getElementById('nav-hover').style.display = 'none';
@@ -742,17 +780,16 @@ function handleNavHoverAt(clientX, clientY) {
   if (nearNavCluster(clientX, clientY)) { hideNavHover(); return; }
   const panel = document.getElementById('photo-panel');
   const rect = panel.getBoundingClientRect();
-  const zone = navHoverZoneFor(rect, clientX, clientY);
+  const zone = navClosestSlotFor(clientX, clientY);
+  if (!zone) { hideNavHover(); return; }
   const slotEl = document.getElementById('nav-' + zone);
-  if (slotEl.dataset.direction === undefined) { hideNavHover(); return; }
   panel.style.cursor = 'pointer';
   const hover = document.getElementById('nav-hover');
   hover.style.display = 'flex';
   hover.style.left = (clientX - rect.left) + 'px';
   hover.style.top = (clientY - rect.top) + 'px';
   hover.style.transform = 'translate(-50%, -50%)';
-  const rotate = { up: 180, down: 0, left: 90, right: 270 }[zone];
-  hover.querySelector('img').style.transform = `rotate(${rotate}deg)`;
+  hover.querySelector('img').style.transform = `rotate(${navRotationForAngle(Number(slotEl.dataset.angle))}deg)`;
 }
 function refreshNavHover() {
   if (navLastPoint) handleNavHoverAt(navLastPoint.x, navLastPoint.y);
@@ -781,9 +818,8 @@ function refreshNavHover() {
     // a click-to-move, same distinction Mapillary's own pointer component
     // effectively makes between rotating the view and clicking a control.
     if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
-    const rect = panel.getBoundingClientRect();
-    const zone = navHoverZoneFor(rect, e.clientX, e.clientY);
-    tryMoveNavSlot(document.getElementById('nav-' + zone));
+    const zone = navClosestSlotFor(e.clientX, e.clientY);
+    if (zone) tryMoveNavSlot(document.getElementById('nav-' + zone));
   });
   // The plain always-visible arrows are directly clickable too, not just
   // reachable by hovering anywhere in their quadrant of the photo.
