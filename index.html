@@ -36,6 +36,21 @@
     background: radial-gradient(circle at 50% 20%, #151a24 0%, var(--bg) 70%);
     display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px;
     z-index: 1000; padding: 20px; text-align: center;
+    overflow: hidden;
+  }
+  /* Soft brand-colored glows plus a faint dot-grid "map" texture, masked to
+     fade out toward the edges — fills the otherwise empty backdrop without a
+     full redesign. z-index:-1 keeps it behind all real content but above the
+     element's own base gradient. */
+  #start-screen::before {
+    content: ''; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(circle at 14% 20%, rgba(34,197,94,0.18), transparent 40%),
+      radial-gradient(circle at 86% 78%, rgba(139,92,246,0.18), transparent 40%),
+      radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px);
+    background-size: auto, auto, 30px 30px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 40%, transparent 85%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 40%, transparent 85%);
   }
   #start-screen h1 { margin: 0; font-size: 42px; letter-spacing: -0.5px; }
   #start-screen h1 span { color: var(--accent); }
@@ -181,6 +196,7 @@
   }
   #result h2 { margin: 0; font-size: 30px; }
   #result p { margin: 0; color: var(--text-dim); }
+  #result-comment { font-style: italic; font-size: 13px; color: var(--accent); opacity: 0.9; }
   #results-table { width: 100%; max-width: 360px; text-align: left; font-size: 14px; border-collapse: collapse; margin-top: 6px; }
   #results-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   #results-table tr:first-child td { color: var(--accent); font-weight: 700; }
@@ -311,6 +327,7 @@
   <div id="result-card">
     <h2 id="result-title"></h2>
     <p id="result-detail"></p>
+    <p id="result-comment"></p>
     <table id="results-table" style="display:none"></table>
     <button class="btn" id="next-btn">Next round</button>
     <button class="btn-ghost" id="result-leave-btn">Leave</button>
@@ -955,6 +972,23 @@ function scoreFromDistance(km) {
   return Math.round(5000 * Math.exp(-km / 2000));
 }
 
+// GeoGuessr-style snarky commentary based on how far off the guess was.
+const DISTANCE_COMMENTS = [
+  { max: 1, text: "Spot on! Are you from around here?" },
+  { max: 10, text: "Incredible! Practically exact." },
+  { max: 50, text: "Really impressive guess!" },
+  { max: 200, text: "Pretty close!" },
+  { max: 750, text: "Not bad — same general area." },
+  { max: 2000, text: "Distance is relative, right?" },
+  { max: 6000, text: "Well, at least you got the right continent. Probably." },
+  { max: 12000, text: "At least it was on the same planet." },
+  { max: Infinity, text: "Almost there! (Just on the completely wrong side of the Earth.)" },
+];
+function distanceComment(km) {
+  for (const c of DISTANCE_COMMENTS) if (km <= c.max) return c.text;
+  return DISTANCE_COMMENTS[DISTANCE_COMMENTS.length - 1].text;
+}
+
 function connectWS(onOpen) {
   if (!WS_URL || WS_URL.includes("PASTE_YOUR")) {
     showToast("Set WS_URL near the top of the script to your deployed Railway domain first.", { error: true, duration: 5000 });
@@ -1035,6 +1069,7 @@ function handleWSMessage(msg) {
         document.getElementById("result").style.display = "flex";
         document.getElementById("result-title").textContent = "Between rounds";
         document.getElementById("result-detail").textContent = "Waiting for the host to continue...";
+        document.getElementById("result-comment").textContent = "";
         document.getElementById("results-table").style.display = "none";
         enterResultMapView();
         const btn = document.getElementById("next-btn");
@@ -1175,6 +1210,7 @@ function showMultiplayerResult(msg) {
     ? `${Math.round(me.dist)} km away`
     : "No guess submitted";
   document.getElementById("result-detail").textContent = me ? `+${me.points} points this round` : "";
+  document.getElementById("result-comment").textContent = me && me.dist != null ? distanceComment(me.dist) : "";
 
   const table = document.getElementById("results-table");
   table.style.display = "table";
@@ -1212,6 +1248,7 @@ function showMultiplayerGameOver(msg) {
   enterResultMapView();
   document.getElementById("result-title").textContent = "Game over";
   document.getElementById("result-detail").textContent = "";
+  document.getElementById("result-comment").textContent = "";
   const table = document.getElementById("results-table");
   table.style.display = "table";
   const sorted = [...msg.players].sort((a, b) => b.score - a.score);
@@ -1283,6 +1320,7 @@ function submitGuess(forced) {
     document.getElementById("next-btn").style.display = "inline-block";
     document.getElementById("result-title").textContent = "Time's up!";
     document.getElementById("result-detail").textContent = `+0 points · Total: ${totalScore}`;
+    document.getElementById("result-comment").textContent = "";
     document.getElementById("result").style.display = "flex";
     enterResultMapView();
     return;
@@ -1307,6 +1345,7 @@ function submitGuess(forced) {
   document.getElementById("next-btn").style.display = "inline-block";
   document.getElementById("result-title").textContent = `${Math.round(dist)} km away`;
   document.getElementById("result-detail").textContent = `+${points} points · Total: ${totalScore}`;
+  document.getElementById("result-comment").textContent = distanceComment(dist);
 }
 
 function nextRound() {
