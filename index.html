@@ -979,7 +979,14 @@ async function tryMoveNavSlot(slot) {
   try { bearingDeg = await mlyViewer.getBearing(); } catch {}
   const edge = bestEdgeForSlot(slot, bearingDeg);
   if (!edge) return;
-  mlyViewer.moveDir(edge.data.direction).catch(() => {});
+  // Navigate to the edge's SPECIFIC target image, not moveDir(direction).
+  // moveDir re-selects an edge by direction enum inside Mapillary, and on
+  // panoramas several edges share the same enum (e.g. the road ahead AND
+  // behind are both Spherical) — so moveDir could follow a different edge
+  // than the one we resolved as being in the clicked direction, sending you
+  // the wrong way. moveTo(targetImageId) is unambiguous.
+  if (edge.target) mlyViewer.moveTo(edge.target).catch(() => {});
+  else mlyViewer.moveDir(edge.data.direction).catch(() => {});
 }
 
 function resetNavAvailability() {
