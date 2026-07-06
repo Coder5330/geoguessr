@@ -128,32 +128,39 @@
     padding: 15px 46px; font-size: 16px; box-shadow: 0 6px 20px rgba(34,197,94,0.35);
   }
 
-  /* Our own always-on movement cue, replacing Mapillary's built-in direction
-     arrows (which faded in/out unpredictably as edge data loaded). Four fixed
-     slots sit around the photo (up/down/left/right); each shows/hides based
-     on whether a navigable direction currently maps there. Which real
-     direction occupies a slot is recomputed from the edge's real-world
-     bearing relative to your current view bearing, so it stays correct as
-     you drag to look around — see the nav-* JS below. */
-  .nav-arrow-badge {
-    position: absolute; display: none; z-index: 50; cursor: pointer;
+  /* Two-tier movement cue, replacing Mapillary's built-in direction arrows
+     (which faded in/out unpredictably as edge data loaded):
+     1. .nav-slot — plain, always-visible, non-interactive arrows clustered
+        at bottom-center, just indicating which directions currently exist.
+     2. #nav-hover — the actual interactive control: a styled circular badge
+        that follows the cursor while hovering the photo and only appears
+        over a zone that has a navigable direction; clicking moves there.
+     Which real direction occupies each of the four zones (up/down/left/
+     right) is recomputed from that edge's real-world bearing relative to
+     your current view bearing, so it stays correct as you drag to look
+     around — see the nav-* JS below. */
+  .nav-slot {
+    position: absolute; bottom: 90px; display: none; z-index: 50; width: 28px; pointer-events: none;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
+  }
+  #nav-left { left: calc(50% - 60px); }
+  #nav-down { left: calc(50% - 20px); }
+  #nav-up { left: calc(50% + 20px); }
+  #nav-right { left: calc(50% + 60px); }
+
+  #nav-hover {
+    position: absolute; display: none; z-index: 55; pointer-events: none;
     width: 72px; height: 72px; border-radius: 50%;
     align-items: center; justify-content: center;
     background: rgba(255,255,255,0.25); border: 2px solid rgba(255,255,255,0.15);
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
-    transition: background 0.15s ease;
   }
-  .nav-arrow-badge:hover { background: rgba(255,255,255,0.35); }
-  .nav-arrow-img {
-    width: 30px; pointer-events: none;
+  #nav-hover img {
+    width: 30px;
     /* arrow.png is solid white on transparent — brightness() scales the RGB
        channels down to a dark grey without touching the alpha/transparency. */
     filter: brightness(0.35);
   }
-  #nav-up { top: 14%; left: 50%; transform: translateX(-50%); }
-  #nav-down { bottom: 14%; left: 50%; transform: translateX(-50%); }
-  #nav-left { top: 50%; left: 6%; transform: translateY(-50%); }
-  #nav-right { top: 50%; right: 6%; transform: translateY(-50%); }
 
   #result {
     position: fixed; left: 0; right: 0; bottom: 0; background: rgba(10,12,18,0.97);
@@ -201,10 +208,13 @@
     #guess-btn { padding: 12px 30px; font-size: 14px; bottom: 14px; }
     #timer { font-size: 13px; padding: 6px 12px; top: 40px; }
     #result { padding: 14px 16px; }
-    .nav-arrow-badge { width: 52px; height: 52px; }
-    .nav-arrow-img { width: 20px; }
-    #nav-left { left: 3%; }
-    #nav-right { right: 3%; }
+    .nav-slot { width: 22px; bottom: 66px; }
+    #nav-left { left: calc(50% - 46px); }
+    #nav-down { left: calc(50% - 16px); }
+    #nav-up { left: calc(50% + 16px); }
+    #nav-right { left: calc(50% + 46px); }
+    #nav-hover { width: 54px; height: 54px; }
+    #nav-hover img { width: 22px; }
   }
 </style>
 </head>
@@ -254,10 +264,11 @@
   <div id="photo-panel">
     <div id="loading">Loading street view...</div>
     <div id="mly"></div>
-    <div id="nav-up" class="nav-arrow-badge"><img class="nav-arrow-img" style="transform:rotate(180deg)" src="assets/arrow.png" alt="" /></div>
-    <div id="nav-down" class="nav-arrow-badge"><img class="nav-arrow-img" style="transform:rotate(0deg)" src="assets/arrow.png" alt="" /></div>
-    <div id="nav-left" class="nav-arrow-badge"><img class="nav-arrow-img" style="transform:rotate(90deg)" src="assets/arrow.png" alt="" /></div>
-    <div id="nav-right" class="nav-arrow-badge"><img class="nav-arrow-img" style="transform:rotate(270deg)" src="assets/arrow.png" alt="" /></div>
+    <img id="nav-up" class="nav-slot" style="transform:rotate(180deg)" src="assets/arrow.png" alt="" />
+    <img id="nav-down" class="nav-slot" style="transform:rotate(0deg)" src="assets/arrow.png" alt="" />
+    <img id="nav-left" class="nav-slot" style="transform:rotate(90deg)" src="assets/arrow.png" alt="" />
+    <img id="nav-right" class="nav-slot" style="transform:rotate(270deg)" src="assets/arrow.png" alt="" />
+    <div id="nav-hover"><img src="assets/arrow.png" alt="" /></div>
   </div>
   <button id="guess-btn" class="btn">Guess</button>
   <div id="map-wrap"><div id="map"></div></div>
@@ -579,16 +590,23 @@ function mountViewer(imageId, { onImage } = {}) {
 }
 
 // --- Custom on-image navigation (replaces Mapillary's flaky direction arrows) ---
-// Four fixed slots around the photo (up/down/left/right) are always present;
-// each shows or hides depending on whether a navigable direction currently
-// maps there. Which real edge occupies a slot is recomputed from that edge's
-// real-world bearing (worldMotionAzimuth) relative to your current view
-// bearing, so — unlike a fixed "up = forward" mapping — it stays correct as
-// you drag to look around, the same way Mapillary's own arrows track edges,
-// just without Mapillary's own flaky rendering.
+// Two tiers:
+// 1. The four .nav-slot images are plain, always-visible, non-interactive —
+//    they just show which directions currently exist, clustered at bottom-
+//    center. Which real edge occupies each zone (up/down/left/right) is
+//    recomputed from that edge's real-world bearing (worldMotionAzimuth)
+//    relative to your current view bearing, so — unlike a fixed "up =
+//    forward" mapping — it stays correct as you drag to look around, the
+//    same way Mapillary's own arrows track edges, just without Mapillary's
+//    own flaky rendering.
+// 2. #nav-hover is the actual interactive control: it follows the cursor
+//    while hovering the photo, appears only over a zone that currently has
+//    a direction, and clicking (not dragging) moves you there.
 
 let navEdges = []; // {direction, worldMotionAzimuth} edges for the CURRENT image only
 let navBearingDeg = 0; // current view bearing, degrees clockwise from north
+let navLastPoint = null; // last known {x,y} client coords while hovering, or null
+let navPointerDownAt = null;
 
 function resetNavAvailability() {
   navEdges = [];
@@ -598,11 +616,6 @@ function addNavDirections(status) {
   if (!status.cached) return;
   for (const edge of status.edges) navEdges.push(edge);
   updateNavSlots();
-}
-function moveNavSlot(slot) {
-  const el = document.getElementById('nav-' + slot);
-  if (el.dataset.direction === undefined || !mlyViewer) return;
-  mlyViewer.moveDir(Number(el.dataset.direction)).catch(() => {});
 }
 
 // Prefer actual spatial steps/turns over sequence Next/Prev (which carry no
@@ -646,19 +659,75 @@ function updateNavSlots() {
   for (const slot of ['up', 'down', 'left', 'right']) {
     const el = document.getElementById('nav-' + slot);
     if (best[slot]) {
-      el.style.display = 'flex';
+      el.style.display = 'block';
       el.dataset.direction = String(best[slot].data.direction);
     } else {
       el.style.display = 'none';
       delete el.dataset.direction;
     }
   }
+  refreshNavHover(); // if already hovering, reflect any change immediately
 }
 
-(function initNavSlotListeners() {
-  for (const slot of ['up', 'down', 'left', 'right']) {
-    document.getElementById('nav-' + slot).addEventListener('click', () => moveNavSlot(slot));
-  }
+// Classic "X divides a rectangle into 4 triangles" hit test, using
+// normalized offsets so it works regardless of the container's aspect ratio.
+function navHoverZoneFor(rect, clientX, clientY) {
+  const dx = (clientX - (rect.left + rect.width / 2)) / rect.width;
+  const dy = (clientY - (rect.top + rect.height / 2)) / rect.height;
+  if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'up' : 'down';
+}
+function hideNavHover() {
+  document.getElementById('nav-hover').style.display = 'none';
+  document.getElementById('photo-panel').style.cursor = '';
+}
+function handleNavHoverAt(clientX, clientY) {
+  const panel = document.getElementById('photo-panel');
+  const rect = panel.getBoundingClientRect();
+  const zone = navHoverZoneFor(rect, clientX, clientY);
+  const slotEl = document.getElementById('nav-' + zone);
+  if (slotEl.dataset.direction === undefined) { hideNavHover(); return; }
+  panel.style.cursor = 'pointer';
+  const hover = document.getElementById('nav-hover');
+  hover.style.display = 'flex';
+  hover.style.left = (clientX - rect.left) + 'px';
+  hover.style.top = (clientY - rect.top) + 'px';
+  hover.style.transform = 'translate(-50%, -50%)';
+  const rotate = { up: 180, down: 0, left: 90, right: 270 }[zone];
+  hover.querySelector('img').style.transform = `rotate(${rotate}deg)`;
+}
+function refreshNavHover() {
+  if (navLastPoint) handleNavHoverAt(navLastPoint.x, navLastPoint.y);
+  else hideNavHover();
+}
+
+(function initNavHoverListeners() {
+  const panel = document.getElementById('photo-panel');
+  panel.addEventListener('pointermove', (e) => {
+    navLastPoint = { x: e.clientX, y: e.clientY };
+    handleNavHoverAt(e.clientX, e.clientY);
+  });
+  panel.addEventListener('pointerleave', () => {
+    navLastPoint = null;
+    hideNavHover();
+  });
+  panel.addEventListener('pointerdown', (e) => {
+    navPointerDownAt = { x: e.clientX, y: e.clientY };
+  });
+  panel.addEventListener('pointerup', (e) => {
+    const start = navPointerDownAt;
+    navPointerDownAt = null;
+    if (!start) return;
+    // Ignore drags (looking around) — only a near-stationary press counts as
+    // a click-to-move, same distinction Mapillary's own pointer component
+    // effectively makes between rotating the view and clicking a control.
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
+    const rect = panel.getBoundingClientRect();
+    const zone = navHoverZoneFor(rect, e.clientX, e.clientY);
+    const slotEl = document.getElementById('nav-' + zone);
+    if (slotEl.dataset.direction === undefined || !mlyViewer) return;
+    mlyViewer.moveDir(Number(slotEl.dataset.direction)).catch(() => {});
+  });
 })();
 
 async function loadRound(tried = []) {
